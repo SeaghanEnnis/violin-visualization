@@ -1,0 +1,12 @@
+X:1
+T:D Major Scale — 2 Octaves
+C:Traditional
+M:4/4
+L:1/4
+Q:1/4=60
+K:Dmaj
+
+% D4 to D6, ascending then descending — quarter notes throughout
+% F# and C# implied by key signature
+D E F G | A B c d | e f g a | b c' d' z |
+d' c' b a | g f e d | c B A G | F E D z |]

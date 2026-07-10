@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Violin Visualizer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@latest/tabler-icons.min.css" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+<h1 class="sr-only">Violin Music Visualizer</h1>
+
+<div id="app">
+
+  <!-- Start screen -->
+  <div id="start-screen">
+    <div class="ss-inner">
+      <p class="ss-logo">Violin Visualizer</p>
+
+      <div class="ss-section">
+        <p class="ss-label">Select a piece</p>
+        <div id="ss-pieces"><!-- file input her --></div>
+      </div>
+
+      <div class="ss-section">
+        <p class="ss-label">Mode</p>
+        <div class="ss-modes">
+          <button class="mode-card selected" data-mode="play-along">
+            <span class="mode-name">Play Along</span>
+            <span class="mode-desc">Score advances at set tempo</span>
+          </button>
+          <button class="mode-card" data-mode="wait-for-me">
+            <span class="mode-name">Wait for Me</span>
+            <span class="mode-desc">Score advances when you play the right note</span>
+          </button>
+        </div>
+      </div>
+
+      <button id="startBtn">Start</button>
+    </div>
+  </div>
+
+  <!-- Header controls -->
+  <div id="controls">
+    <button id="backBtn" aria-label="Back to menu">
+      <i class="ti ti-chevron-left" aria-hidden="true"></i>
+    </button>
+    <button id="playBtn" aria-label="Play or pause">
+      <i class="ti ti-player-play" aria-hidden="true"></i>
+    </button>
+
+    <div id="piece-info">
+      <div class="song-title" id="pieceTitle">Loading…</div>
+      <div class="song-sub" id="pieceSub"></div>
+    </div>
+
+    <div id="modeBadge" class="mode-badge">Play Along</div>
+
+    <div class="ctrl-group">
+      <span class="ctrl-label">Piece</span>
+      <select id="pieceSelect"></select>
+    </div>
+
+    <div class="ctrl-group">
+      <span class="ctrl-label">Tempo</span>
+      <input type="range" id="tempoSlider" min="40" max="200" value="72" step="1" />
+      <span class="ctrl-val" id="tempoVal">72 BPM</span>
+    </div>
+
+    <div class="ctrl-group">
+      <span class="ctrl-label">Intensity</span>
+      <input type="range" id="intensitySlider" min="1" max="10" value="1" step="1" />
+      <span class="ctrl-val" id="intensityVal">1</span>
+    </div>
+  </div>
+
+  <!-- Visualizer area -->
+  <div id="viz-area">
+    <canvas id="vizCanvas" aria-label="Horizontal waveform visualizer for violin strings"></canvas>
+    <div class="note-name" id="movementDisplay"></div>
+    <div class="bpm-pulse" id="beatDisplay">♩ —</div>
+    <div id="liveNoteDisplay" aria-label="Live detected note">—</div>
+    <div id="timeline"><div id="timeline-fill"></div></div>
+  </div>
+
+</div>
+
+<script src="/static/js/visualizer.js"></script>
+</body>
+</html>

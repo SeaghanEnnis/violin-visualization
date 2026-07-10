@@ -1,0 +1,33 @@
+X:1
+T:Note Values Exercise
+C:Traditional
+M:4/4
+L:1/8
+Q:1/4=80
+K:Cmaj
+
+% L:1/8 means the bare letter = eighth note
+% Quarter note = letter + 2   (e.g. C2)
+% Half note    = letter + 4   (e.g. C4)
+% Eighth note  = bare letter  (e.g. C)
+
+% ── Quarter notes (4 per bar) ────────────────────────────────────────────────
+C2 D2 E2 F2 | G2 A2 B2 c2 |
+
+% ── Half notes (2 per bar) ───────────────────────────────────────────────────
+c4 B4 | A4 G4 |
+
+% ── Eighth notes (8 per bar) ─────────────────────────────────────────────────
+c B A G F E D C | C D E F G A B c |
+
+% ── Mixed: quarter, quarter, half ────────────────────────────────────────────
+E2 G2 c4 | G2 E2 C4 |
+
+% ── Mixed: half, two quarters ────────────────────────────────────────────────
+c4 B2 A2 | G4 E2 C2 |
+
+% ── Mixed: four eighths, one half ────────────────────────────────────────────
+C D E F G4 | c B A G E4 |
+
+% ── Whole note finish ─────────────────────────────────────────────────────────
+C8 |]
