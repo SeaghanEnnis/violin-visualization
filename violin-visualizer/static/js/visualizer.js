@@ -502,6 +502,7 @@ function drawFrame() {
   });
 
   //Beat metronome flash
+  const beatPhase = (time * beatsPerSec) % 1;
   if (playing && beatPhase < 0.12) {
     const t = 1 - beatPhase / 0.12;
     const glow = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, H * 0.6);
