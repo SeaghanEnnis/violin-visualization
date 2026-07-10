@@ -279,7 +279,7 @@ def get_score():
     if not abc_path.exists():
         return jsonify({"error": f"ABC file '{filename}' not found"}), 404
     try:
-        from sheet_music_reader import parse_abc
+        from sheet_music_reader.sheet_music_reader import parse_abc
         sheet    = parse_abc(abc_path.read_text(encoding="utf-8"))
         events   = _abc_to_score_json(sheet)
         duration = max((e["t"] + e["dur"] for e in events), default=0)
