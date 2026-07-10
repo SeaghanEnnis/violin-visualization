@@ -4,7 +4,7 @@ from model.note import Note
 from model.sheet_music import SheetMusic, TimeSignature, KeySignature, NoteEvent, Duration
 
 
-#This was going to be used with
+#This was going to be used to create a sheet music but it not quite ready for us
 
 class SheetMusicVisualizer:
     def __init__(self, sheet_music: SheetMusic):
