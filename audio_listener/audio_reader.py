@@ -2,6 +2,7 @@ import numpy as np
 import sounddevice as sd
 import librosa
 
+#Partial duplication in the mian app.py
 def get_first_working_wasapi_input():
     devices = sd.query_devices()
     

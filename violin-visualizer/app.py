@@ -17,24 +17,23 @@ import librosa
 import re
 from flask import Flask, render_template, jsonify, request
 
-# Suppress per-request Werkzeug logs for the high-frequency polling endpoint
+#Reduce logs
 logging.getLogger("werkzeug").addFilter(
     type("_", (logging.Filter,), {
         "filter": lambda _, r: "/api/live-note" not in r.getMessage()
     })()
 )
 
-# Allow imports from the project root (sheet_music_reader, model.*)
+#Allow imports from the project root (sheet_music_reader, model.*)
+#TODO - remove
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 ABC_DIR = Path(__file__).parent.parent / "abc"
 
 app = Flask(__name__)
 
-# Live audio detection
-# 2048 @ 44.1kHz ≈ 46ms/block (was 4096 ≈ 93ms). Safe to shrink because plain
-# librosa.yin (unlike pyin's probabilistic search) runs in under 1ms, leaving
-# huge headroom under the block deadline instead of eating most of it.
+#Live audio detection
+#2048 @ 44.1kHz ≈ 46ms/block t.
 _WINDOW_SIZE   = 2048
 _THRESHOLD     = 0.01
 _live_note     = {"note": None, "freq": 0.0}
@@ -43,9 +42,7 @@ _target_sr     = 44100
 _stream        = None
 _note_history  = deque(maxlen=3)          # temporal smoothing: vote over last 3 frames
 
-# Violin's practical pitch range (open G3 up to high positions/harmonics).
-# Constraining yin to this band is what lets it disambiguate octaves instead
-# of just picking the strongest partial like a raw FFT peak-pick would.
+#Max/min for yin read
 _FMIN = librosa.note_to_hz("G3")
 _FMAX = librosa.note_to_hz("C8")
 
@@ -83,22 +80,19 @@ def _audio_callback(indata, _frames, _time, _status):
             _live_note["freq"] = 0.0
         return
 
-    # YIN (autocorrelation-based, deterministic): constrained to the violin's
-    # fmin/fmax range so it doesn't latch onto a harmonic partial and report a
-    # note an octave away from what was actually played. Unlike pyin's
-    # probabilistic search this runs in under 1ms, which is what lets us use
-    # a small block size for low-latency pickup without missing the deadline.
+    #YIN (autocorrelation-based, deterministic): constrained to the violin's
+    #fmin/fmax range so it doesn't latch onto a harmonic partial and report a
+    #note an octave away from what was actually played
     f0 = librosa.yin(
         audio, fmin=_FMIN, fmax=_FMAX, sr=_target_sr,
         frame_length=1024, hop_length=128,
     )
 
-    # Median across the frames in this block — robust to single-frame outliers
+    #Median across the frames in this block, to single-frame outliers
     freq = float(np.median(f0))
     note = _freq_to_note(freq)
 
-    # Temporal smoothing: only emit the note that appears in the majority of
-    # the last 3 blocks, preventing single-block mis-detections.
+    #smoothing
     _note_history.append(note)
     smoothed = max(set(_note_history), key=list(_note_history).count)
     with _note_lock:
@@ -129,22 +123,23 @@ def _stop_audio():
 
 atexit.register(_stop_audio)
 
-# For some reason this is required to prevent multiple subprocesses from damaging the audio input
+#For some reason this is required to prevent multiple subprocesses from damaging the audio input
 if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
     _start_audio()
 
 # ── Shared string definitions ───────────────────────────────────────────────
 STRINGS = [
-    {"name": "G", "freq": 0.8,  "color": "#8b4513", "phase": 0.0},
-    {"name": "D", "freq": 1.2,  "color": "#c4a96b", "phase": 0.5},
-    {"name": "A", "freq": 1.7,  "color": "#d4b896", "phase": 1.1},
     {"name": "E", "freq": 2.4,  "color": "#f0e6d0", "phase": 1.8},
+    {"name": "A", "freq": 1.7,  "color": "#d4b896", "phase": 1.1},
+    {"name": "D", "freq": 1.2,  "color": "#c4a96b", "phase": 0.5},
+    {"name": "G", "freq": 0.8,  "color": "#8b4513", "phase": 0.0},
 ]
 
 DEFAULT_PIECE = None   # all pieces loaded from abc/ folder
 
 
 #abc file support
+#match the note to the string
 def _string_for_midi(midi: int) -> str:
     # MIDI to String
     if midi < 62:   return "G"   # G3 – C#4
@@ -219,7 +214,7 @@ def _abc_to_score_json(sheet) -> list[dict]:
 
 
 def _read_abc_meta(path: Path) -> tuple[str, str, float]:
-    """Return (title, composer, tempo_bpm) from an ABC file header."""
+    #Return (title, composer, tempo_bpm) from an ABC file header
     title, composer, tempo = path.stem, "Unknown", 120.0
     with path.open(encoding="utf-8") as f:
         for line in f:
@@ -229,7 +224,7 @@ def _read_abc_meta(path: Path) -> tuple[str, str, float]:
             elif line.startswith("C:"):
                 composer = line[2:].strip()
             elif line.startswith("Q:"):
-                # Best-effort: extract the BPM number
+                #Tempo
                 m = re.search(r"(\d+)\s*$", line[2:].strip())
                 if m:
                     tempo = float(m.group(1))
