@@ -6,8 +6,6 @@ L:1/8
 Q:1/4=72
 K:Cmaj
 
-% Each bar has two groups of four slurred eighth notes
-% ( opens a slur, ) closes it
 
 % ── Stepwise slurs ────────────────────────────────────────────────────────────
 "Stepwise" (C D E F) (G A B c) | (d c B A) (G F E D) | A B c d |

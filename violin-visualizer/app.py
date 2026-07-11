@@ -262,6 +262,7 @@ def get_pieces():
 @app.route("/api/score")
 def get_score():
     #Return score and metadata for an ABC piece. ?piece=abc:<stem>
+    #TODO - add a midi reader?
     piece_id = request.args.get("piece") or DEFAULT_PIECE
     if not piece_id:
         return jsonify({"error": "No piece specified and no default available"}), 400
