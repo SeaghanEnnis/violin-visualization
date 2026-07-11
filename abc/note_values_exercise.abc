@@ -12,7 +12,7 @@ K:Cmaj
 % Eighth note  = bare letter  (e.g. C)
 
 % ── Quarter notes (4 per bar) ────────────────────────────────────────────────
-C2 D2 E2 F2 | G2 A2 B2 c2 |
+z4 | C2 D2 E2 F2 | G2 A2 B2 c2 |
 
 % ── Half notes (2 per bar) ───────────────────────────────────────────────────
 c4 B4 | A4 G4 |

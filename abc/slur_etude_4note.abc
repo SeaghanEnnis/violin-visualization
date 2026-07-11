@@ -8,8 +8,8 @@ K:Cmaj
 
 
 % ── Stepwise slurs ────────────────────────────────────────────────────────────
-"Stepwise" (C D E F) (G A B c) | (d c B A) (G F E D) | A B c d |
-(E F G A) (B c d e) | (d c B A) G4 z4 |
+z4 | "Stepwise" (C D E F) (G A B c) | (d c B A) (G F E D) | A B c d |
+(E F G A) (B c d e) | (d c B A) G4 z4 | z4 |
 
 % ── Arpeggio slurs ────────────────────────────────────────────────────────────
 "Arpeggio" (C E G c) (B G E C) | (D F A d) (c A F D) |

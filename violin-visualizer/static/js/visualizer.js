@@ -418,6 +418,42 @@ function drawFrame() {
     ctx.restore();
   });
 
+  //Rests — drawn as a neutral band across all lanes since they have no string
+  SCORE.forEach(scoreEv => {
+    if (!scoreEv.rest) return;
+
+    const bLeft  = timeToX(scoreEv.t);
+    const bRight = timeToX(scoreEv.t + scoreEv.dur);
+    if (bRight <= 0 || bLeft >= W) return;
+
+    const cLeft = Math.max(0, bLeft);
+    const cRight = Math.min(W, bRight);
+    const bW    = cRight - cLeft;
+    if (bW <= 0) return;
+
+    const isCurrent = scoreEv === ev;
+    const isPast    = bRight < PLAYHEAD_X;
+
+    const fillA = isPast ? 0.03 : isCurrent ? 0.10 : 0.06;
+    ctx.fillStyle = `rgba(255,255,255,${fillA})`;
+    ctx.fillRect(cLeft, 0, bW, H);
+
+    if (!isPast) {
+      ctx.strokeStyle = `rgba(255,255,255,${isCurrent ? 0.3 : 0.14})`;
+      ctx.lineWidth   = (isCurrent ? 1.5 : 1) * dpr;
+      ctx.setLineDash([2 * dpr, 5 * dpr]);
+      ctx.strokeRect(cLeft + 0.5, 0.5, bW - 1, H - 1);
+      ctx.setLineDash([]);
+
+      if (bW > 10 * dpr) {
+        ctx.font      = `500 ${Math.round((isCurrent ? 16 : 13) * dpr)}px Inter, system-ui, sans-serif`;
+        ctx.fillStyle = `rgba(255,255,255,${isCurrent ? 0.55 : 0.3})`;
+        ctx.textAlign = "center";
+        ctx.fillText("𝄽", (cLeft + cRight) / 2, H / 2 + 5 * dpr);
+      }
+    }
+  });
+
   //Slur groups: unified border + arc
   SLUR_GROUPS.forEach(sg => {
     const x1    = timeToX(sg.startT);

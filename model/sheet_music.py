@@ -214,16 +214,11 @@ class NoteEvent:
         return f"{self.note}({self.duration})"
 
 
-# ---------------------------------------------------------------------------
-# Chord  (multiple notes sounding simultaneously)
-# ---------------------------------------------------------------------------
-
+#Chord  (multiple notes sounding simultaneously)
 @dataclass
 class Chord:
-    """
-    A group of NoteEvents that share the same duration and start time,
-    representing notes played simultaneously.
-    """
+    #A group of NoteEvents that share the same duration and start time
+
     notes:        list[Note]                = field(default_factory=list)
     duration:     Duration                  = field(default_factory=lambda: Duration.QUARTER)
     dynamic:      Optional[Dynamic]         = None
@@ -238,19 +233,13 @@ class Chord:
         return f"Chord([{pitches}], {self.duration})"
 
 
-# ---------------------------------------------------------------------------
-# Beat  (a single rhythmic slot within a measure)
-# ---------------------------------------------------------------------------
-
+#Beat  (a single rhythmic slot within a measure)
 @dataclass
 class Beat:
-    """
-    Represents one rhythmic slot within a measure.
+    #A beat can hold either a single NoteEvent or a Chord. For polyphonic
+    #music, a measure may hold multiple voices represented as separate lists
+    #of Beat objects.
 
-    A beat can hold either a single NoteEvent or a Chord. For polyphonic
-    music, a measure may hold multiple voices represented as separate lists
-    of Beat objects.
-    """
     position:  float                        = 0.0   # offset from measure start (in whole-note fractions)
     event:     Optional[NoteEvent | Chord]  = None
 

@@ -8,5 +8,5 @@ K:Dmaj
 
 % D4 to D6, ascending then descending — quarter notes throughout
 % F# and C# implied by key signature
-D E F G | A B c d | e f g a | b c' d' z |
+z4 | D E F G | A B c d | e f g a | b c' d' z |
 d' c' b a | g f e d | c B A G | F E D z |]
