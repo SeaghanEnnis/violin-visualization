@@ -31,6 +31,18 @@ Note body:
   (3  (2  etc.      tuplet  ((3abc = triplet of a, b, c)
   %                 comment to end of line
   \\                line continuation (TODO, does not work)
+
+Non-standard extensions (this project only — plain comments to any other ABC tool):
+  %%sync page=N row=M       tags the measure immediately following it with a page/row
+                            position in a companion PDF (sheets/<tune>.pdf), for
+                            scroll-syncing the real engraving to playback. `row` is
+                            the 1-indexed system/line on that page, counted from the
+                            top. Place it on its own line right before the line of
+                            notes it corresponds to.
+  %%syncpage page=N rows=M  declares how many systems/rows page N actually has, so
+                            row heights are computed correctly even before every
+                            row on that page has a %%sync tag. Place anywhere;
+                            order doesn't matter.
 """
 
 from __future__ import annotations
@@ -82,6 +94,12 @@ _ACC_DELTA      = {"^^": 2, "^": 1, "__": -2, "_": -1, "=": 0, "": 0}
 
 # Normal counts for tuplets: n notes in the space of _TUPLET_NORMAL[n]
 _TUPLET_NORMAL  = {2: 3, 3: 2, 4: 3, 5: 4, 6: 4, 7: 4}
+
+# %%sync / %%syncpage — see module docstring. Matched before the generic "%"
+# comment stripper; %%sync survives into the body token stream (it's tied to
+# a measure), %%syncpage is pure header-level metadata and is consumed here.
+_SYNC_LINE_RE     = re.compile(r"^%%sync\s+page=(\d+)\s+row=(\d+)\s*$", re.IGNORECASE)
+_SYNCPAGE_LINE_RE = re.compile(r"^%%syncpage\s+page=(\d+)\s+rows=(\d+)\s*$", re.IGNORECASE)
 
 # Accidentals implied by each key signature — applied to unmodified notes
 # sharps: F C G D A E B  
@@ -161,6 +179,7 @@ def _parse_header(lines: list[str]) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 _TOKEN_RE = re.compile(r"""
+    (?P<sync>  @@SYNC:(?P<syncpage>\d+):(?P<syncrow>\d+)@@ )   |  # %%sync marker, see above
     (?P<annotation>  "[^"]*" )                   |   # "Tutti", "Solo", chord symbols — skip
     (?P<tuplet>      \( (?P<tnum>[2-9]) )       |
     (?P<chord_start> \[  )                       |
@@ -246,7 +265,20 @@ def parse_abc(abc_text: str) -> SheetMusic:
     #Parsing Notation
 
     cleaned: list[str] = []
+    sync_page_rows: dict[int, int] = {}
     for line in abc_text.splitlines():
+        sync_m = _SYNC_LINE_RE.match(line.strip())
+        if sync_m:
+            #Rewritten as an in-body marker token instead of being stripped
+            #like a plain comment, so the tokenizer below can pick it up.
+            cleaned.append(f" @@SYNC:{sync_m.group(1)}:{sync_m.group(2)}@@ ")
+            continue
+        syncpage_m = _SYNCPAGE_LINE_RE.match(line.strip())
+        if syncpage_m:
+            #Pure header-level metadata, not tied to a measure — consumed
+            #here rather than surfaced as a body token.
+            sync_page_rows[int(syncpage_m.group(1))] = int(syncpage_m.group(2))
+            continue
         pos = line.find("%") # Strip comments
         if pos >= 0:
             line = line[:pos]
@@ -281,6 +313,7 @@ def parse_abc(abc_text: str) -> SheetMusic:
         time_signature = meter,
         key_signature  = key,
         tempo          = tempo,
+        sync_page_rows = sync_page_rows,
     )
 
     #Violin only ??
@@ -311,6 +344,13 @@ def parse_abc(abc_text: str) -> SheetMusic:
         kind = m.lastgroup
 
         if kind == "space":
+            continue
+
+        #%%sync page/row marker — tags the measure about to receive events.
+        #No barline has been consumed since this marker appeared, so
+        #current_measure is already the measure the following notes belong to.
+        if kind == "sync":
+            current_measure.sync = (int(m.group("syncpage")), int(m.group("syncrow")))
             continue
 
         #Inline annotations ("Tutti", "Solo", chord symbols)

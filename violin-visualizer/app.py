@@ -15,7 +15,7 @@ import numpy as np
 import sounddevice as sd
 import librosa
 import re
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, send_from_directory
 
 #Reduce logs
 logging.getLogger("werkzeug").addFilter(
@@ -28,7 +28,8 @@ logging.getLogger("werkzeug").addFilter(
 #TODO - remove
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-ABC_DIR = Path(__file__).parent.parent / "abc"
+ABC_DIR    = Path(__file__).parent.parent / "abc"
+SHEETS_DIR = Path(__file__).parent.parent / "sheets"
 
 app = Flask(__name__)
 
@@ -148,16 +149,25 @@ def _string_for_midi(midi: int) -> str:
     return "E"                    # E5 and above
 
 
-def _abc_to_score_json(sheet) -> list[dict]:
-    """Convert a SheetMusic object (from parse_abc) to the frontend score format."""
+def _abc_to_score_json(sheet) -> tuple[list[dict], list[dict]]:
+    """Convert a SheetMusic object (from parse_abc) to the frontend score format.
+
+    Returns (events, sync_anchors) — sync_anchors are {t, page, row} points
+    lifted from any `%%sync page=N row=M` directives in the source ABC, used
+    to scroll a companion PDF (sheets/<tune>.pdf) in step with playback.
+    """
     from model.sheet_music import NoteEvent, Chord
 
     BEATS_PER_WHOLE = 4   # 1 whole note = 4 quarter-note beats
     events: list[dict] = []
+    sync_anchors: list[dict] = []
     t = 0.0
 
     for track in sheet.tracks:
         for measure in track.measures:
+            if measure.sync:
+                page, row = measure.sync
+                sync_anchors.append({"t": round(t, 4), "page": page, "row": row})
             for beat in measure.beats:
                 ev  = beat.event
                 dur = ev.duration.value * BEATS_PER_WHOLE
@@ -210,7 +220,7 @@ def _abc_to_score_json(sheet) -> list[dict]:
 
                 t += dur
 
-    return events
+    return events, sync_anchors
 
 
 def _read_abc_meta(path: Path) -> tuple[str, str, float]:
@@ -244,6 +254,12 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/sheets/<path:filename>")
+def sheet_pdf(filename):
+    """Serve scanned sheet-music PDFs from sheets/ so pdf.js can fetch them."""
+    return send_from_directory(SHEETS_DIR, filename)
+
+
 @app.route("/api/pieces")
 def get_pieces():
     """List all ABC pieces from the abc/ folder."""
@@ -270,15 +286,20 @@ def get_score():
     if not piece_id.startswith("abc:"):
         return jsonify({"error": f"Unknown piece '{piece_id}'"}), 404
 
-    filename = piece_id[4:] + ".abc"
+    stem     = piece_id[4:]
+    filename = stem + ".abc"
     abc_path = ABC_DIR / filename
     if not abc_path.exists():
         return jsonify({"error": f"ABC file '{filename}' not found"}), 404
     try:
         from sheet_music_reader.sheet_music_reader import parse_abc
         sheet    = parse_abc(abc_path.read_text(encoding="utf-8"))
-        events   = _abc_to_score_json(sheet)
+        events, sync_anchors = _abc_to_score_json(sheet)
         duration = max((e["t"] + e["dur"] for e in events), default=0)
+
+        pdf_path = SHEETS_DIR / (stem + ".pdf")
+        pdf_url  = f"/sheets/{stem}.pdf" if pdf_path.exists() else None
+
         return jsonify({
             "piece": {
                 "title":      sheet.title,
@@ -286,9 +307,12 @@ def get_score():
                 "instrument": "Violin",
                 "duration":   round(duration, 2),
                 "tempo":      sheet.tempo,
+                "pdf":        pdf_url,
             },
-            "strings": STRINGS,
-            "score":   events,
+            "strings":       STRINGS,
+            "score":         events,
+            "syncAnchors":   sync_anchors,
+            "syncPageRows":  sheet.sync_page_rows,
         })
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500

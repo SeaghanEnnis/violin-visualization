@@ -371,9 +371,62 @@ canvas {
   transition: width 0.05s linear;
 }
 
+/* ── Sheet music panel ─────────────────────────────────────────────── */
+#sheet-area {
+  position: relative;
+  border-top: 0.5px solid rgba(255, 255, 255, 0.07);
+  background: #06060c;
+}
+
+#sheet-area[hidden] { display: none; }
+
+.sheet-area-label {
+  position: absolute;
+  top: 10px;
+  left: 14px;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.55);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  pointer-events: none;
+  z-index: 2;
+  background: rgba(6, 6, 12, 0.75);
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+
+#sheetScroll {
+  height: 480px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scroll-behavior: auto;
+  padding: 34px 0 0;
+}
+#sheetScroll::-webkit-scrollbar { width: 6px; }
+#sheetScroll::-webkit-scrollbar-track { background: transparent; }
+#sheetScroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 3px; }
+
+#sheetPages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 40vh; /* lets the final measures scroll up into view rather than stopping at the last page edge */
+}
+
+#sheetPages canvas {
+  display: block;
+  width: 92%;
+  height: auto;
+  background: #fff;
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.45);
+  border-radius: 2px;
+}
+
 /* ── Responsive ────────────────────────────────────────────────────── */
 @media (max-width: 600px) {
   #controls { gap: 12px; padding: 12px 14px; }
   input[type="range"] { width: 72px; }
   #viz-area { height: 280px; }
+  #sheetScroll { height: 360px; }
 }

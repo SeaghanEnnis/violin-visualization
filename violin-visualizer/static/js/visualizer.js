@@ -6,7 +6,11 @@
  * Thanks mr claude
  */
 
-"use strict";
+// Loaded as an ES module (see index.html) so pdf.js — which only ships
+// .mjs builds — can be imported directly; modules are strict mode already.
+import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/build/pdf.min.mjs";
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/build/pdf.worker.min.mjs";
 
 // State
 let STRINGS       = [];
@@ -52,6 +56,190 @@ const pieceTitle       = document.getElementById("pieceTitle");
 const pieceSub         = document.getElementById("pieceSub");
 const pieceSelect      = document.getElementById("pieceSelect");
 const liveNoteDisplay  = document.getElementById("liveNoteDisplay");
+const sheetArea        = document.getElementById("sheet-area");
+const sheetScroll      = document.getElementById("sheetScroll");
+const sheetPages       = document.getElementById("sheetPages");
+
+// ── Sheet-music PDF sync ─────────────────────────────────────────────────────
+// Scroll position tracks songPos against PIXEL_ANCHORS — {t, y} points built
+// from %%sync page/row tags in the ABC source (see sheet_music_reader.py),
+// linearly interpolated between them. With fewer than two anchors we fall
+// back to a uniform songPos/SONG_DURATION mapping onto the PDF's total
+// scroll height, which drifts on pieces with uneven engraving but at least
+// keeps moving in lockstep with tempo.
+let pdfDoc          = null;
+let currentPdfUrl   = null;
+let sheetMaxScroll  = 0;
+let SYNC_ANCHORS    = [];      // raw {t, page, row} from the API
+let SYNC_PAGE_ROWS  = {};      // declared {page: totalRows} from %%syncpage, keyed by string
+let PAGE_META       = [];      // [{top, height}] per PDF page, 0-indexed
+let PIXEL_ANCHORS   = [];      // [{t, y}] resolved from SYNC_ANCHORS + PAGE_META, sorted by t
+let userScrolling   = false;   // true while the user is actively/recently interacting
+let snapping        = false;   // true while catching back up to the time-derived position
+let userScrollTimer = null;
+const SNAP_INACTIVITY_MS = 900;   // how long to leave the user alone after they scroll
+const SNAP_CATCHUP       = 0.22;  // fraction of the gap closed per animation frame
+const SNAP_DONE_PX       = 1.5;
+
+//Builds {t, y} pixel anchors from the raw page/row sync tags. Rows-per-page
+//comes from a %%syncpage declaration when the ABC source has one; otherwise
+//it's inferred as the highest row number tagged so far on that page, which
+//only comes out right once every system on the page has been tagged.
+function buildPixelAnchors() {
+  PIXEL_ANCHORS = [];
+  if (!SYNC_ANCHORS.length || !PAGE_META.length) return;
+
+  const rowsPerPage = {};
+  SYNC_ANCHORS.forEach(a => {
+    rowsPerPage[a.page] = Math.max(rowsPerPage[a.page] || 0, a.row);
+  });
+  Object.entries(SYNC_PAGE_ROWS).forEach(([page, rows]) => {
+    rowsPerPage[page] = rows;
+  });
+
+  PIXEL_ANCHORS = SYNC_ANCHORS
+    .map(a => {
+      const meta = PAGE_META[a.page - 1];
+      if (!meta) return null;
+      const rowH = meta.height / rowsPerPage[a.page];
+      return { t: a.t, y: meta.top + (a.row - 1) * rowH };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.t - b.t);
+}
+
+function sheetTargetScrollTop() {
+  if (PIXEL_ANCHORS.length >= 2) return interpolateSheetAnchors(songPos);
+  const ratio = SONG_DURATION > 0 ? Math.max(0, Math.min(1, songPos / SONG_DURATION)) : 0;
+  return ratio * sheetMaxScroll;
+}
+
+function interpolateSheetAnchors(t) {
+  const anchors = PIXEL_ANCHORS;
+  if (t <= anchors[0].t) return anchors[0].y;
+
+  for (let i = 0; i < anchors.length - 1; i++) {
+    const a = anchors[i], b = anchors[i + 1];
+    if (t <= b.t) {
+      const frac = b.t === a.t ? 0 : (t - a.t) / (b.t - a.t);
+      return a.y + (b.y - a.y) * frac;
+    }
+  }
+
+  //Past the last tagged row: keep advancing toward the bottom of the sheet
+  //at the same time/space rate as the piece's overall remaining runway,
+  //rather than freezing at the last known anchor.
+  const last = anchors[anchors.length - 1];
+  const remainingT = SONG_DURATION - last.t;
+  if (remainingT <= 0) return last.y;
+  const frac = Math.max(0, Math.min(1, (t - last.t) / remainingT));
+  return last.y + (sheetMaxScroll - last.y) * frac;
+}
+
+function beginUserScroll() {
+  userScrolling = true;
+  snapping = false;
+  clearTimeout(userScrollTimer);
+  userScrollTimer = setTimeout(() => {
+    userScrolling = false;
+    snapping = true;
+  }, SNAP_INACTIVITY_MS);
+}
+sheetScroll.addEventListener("wheel", beginUserScroll, { passive: true });
+sheetScroll.addEventListener("touchstart", beginUserScroll, { passive: true });
+sheetScroll.addEventListener("pointerdown", beginUserScroll);
+
+//Runs every frame regardless of play/pause so the sheet snaps into place
+//immediately on load/scrub and still catches up while paused.
+function sheetScrollLoop() {
+  if (pdfDoc && sheetMaxScroll > 0 && !userScrolling) {
+    const target = sheetTargetScrollTop();
+    if (snapping) {
+      const next = sheetScroll.scrollTop + (target - sheetScroll.scrollTop) * SNAP_CATCHUP;
+      if (Math.abs(target - next) < SNAP_DONE_PX) {
+        sheetScroll.scrollTop = target;
+        snapping = false;
+      } else {
+        sheetScroll.scrollTop = next;
+      }
+    } else {
+      sheetScroll.scrollTop = target;
+    }
+  }
+  requestAnimationFrame(sheetScrollLoop);
+}
+requestAnimationFrame(sheetScrollLoop);
+
+async function renderSheetPages() {
+  if (!pdfDoc) return;
+  sheetPages.innerHTML = "";
+  const targetWidth = sheetScroll.clientWidth * 0.92;
+  const dpr = window.devicePixelRatio || 1;
+  PAGE_META = [];
+
+  for (let i = 1; i <= pdfDoc.numPages; i++) {
+    const page = await pdfDoc.getPage(i);
+    const baseViewport = page.getViewport({ scale: 1 });
+    const scale = targetWidth / baseViewport.width;
+    const viewport = page.getViewport({ scale: scale * dpr });
+
+    const canvas = document.createElement("canvas");
+    canvas.width  = viewport.width;
+    canvas.height = viewport.height;
+    canvas.style.width = targetWidth + "px";
+    sheetPages.appendChild(canvas);
+
+    await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
+
+    //Content-relative Y (independent of current scroll position), since
+    //canvas.offsetTop is relative to whichever ancestor happens to be the
+    //nearest positioned element, not necessarily #sheetPages.
+    const canvasRect = canvas.getBoundingClientRect();
+    const scrollRect  = sheetScroll.getBoundingClientRect();
+    PAGE_META.push({
+      top:    canvasRect.top - scrollRect.top + sheetScroll.scrollTop,
+      height: canvasRect.height,
+    });
+  }
+
+  sheetMaxScroll = Math.max(0, sheetPages.scrollHeight - sheetScroll.clientHeight);
+  buildPixelAnchors();
+}
+
+async function loadSheetPdf(url, syncAnchors, syncPageRows) {
+  SYNC_ANCHORS   = syncAnchors || [];
+  SYNC_PAGE_ROWS = syncPageRows || {};
+
+  if (!url) {
+    sheetArea.hidden = true;
+    pdfDoc = null;
+    currentPdfUrl = null;
+    PIXEL_ANCHORS = [];
+    return;
+  }
+
+  sheetArea.hidden = false;
+  userScrolling = false;
+  snapping = false;
+  clearTimeout(userScrollTimer);
+
+  if (url === currentPdfUrl && pdfDoc) {
+    buildPixelAnchors();   // page layout is already known; anchors may have changed pieces
+    sheetScroll.scrollTop = sheetTargetScrollTop();
+    return;
+  }
+
+  currentPdfUrl = url;
+  try {
+    pdfDoc = await pdfjsLib.getDocument(url).promise;
+    await renderSheetPages();
+    sheetScroll.scrollTop = sheetTargetScrollTop();
+  } catch (err) {
+    console.error("Failed to load sheet PDF:", err);
+    sheetArea.hidden = true;
+    pdfDoc = null;
+  }
+}
 
 //oad piece list and populate selector
 async function loadPieceList() {
@@ -117,6 +305,7 @@ async function loadScore(pieceId) {
       tempoVal.textContent = tempoSlider.value + " BPM";
     }
     drawFrame();
+    loadSheetPdf(data.piece.pdf, data.syncAnchors, data.syncPageRows);
   } catch (err) {
     pieceTitle.textContent = "Could not load score";
     console.error("Failed to fetch score:", err);
@@ -130,7 +319,18 @@ function resize() {
   canvas.height = area.clientHeight * window.devicePixelRatio;
 }
 resize();
-window.addEventListener("resize", () => { resize(); drawFrame(); });
+let sheetResizeTimer = null;
+window.addEventListener("resize", () => {
+  resize();
+  drawFrame();
+  if (pdfDoc) {
+    clearTimeout(sheetResizeTimer);
+    sheetResizeTimer = setTimeout(async () => {
+      await renderSheetPages();
+      sheetScroll.scrollTop = sheetTargetScrollTop();
+    }, 200);
+  }
+});
 
 //Utils
 function computeSlurGroups() {

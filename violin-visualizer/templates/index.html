@@ -87,8 +87,16 @@
     <div id="timeline"><div id="timeline-fill"></div></div>
   </div>
 
+  <!-- Sheet music (real PDF), scrolls in sync with playback -->
+  <div id="sheet-area" hidden>
+    <div class="sheet-area-label">Sheet Music</div>
+    <div id="sheetScroll">
+      <div id="sheetPages"></div>
+    </div>
+  </div>
+
 </div>
 
-<script src="/static/js/visualizer.js"></script>
+<script src="/static/js/visualizer.js" type="module"></script>
 </body>
 </html>
