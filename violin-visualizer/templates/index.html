@@ -78,21 +78,25 @@
     </div>
   </div>
 
-  <!-- Visualizer area -->
-  <div id="viz-area">
-    <canvas id="vizCanvas" aria-label="Horizontal waveform visualizer for violin strings"></canvas>
-    <div class="note-name" id="movementDisplay"></div>
-    <div class="bpm-pulse" id="beatDisplay">♩ —</div>
-    <div id="liveNoteDisplay" aria-label="Live detected note">—</div>
-    <div id="timeline"><div id="timeline-fill"></div></div>
-  </div>
+  <div id="main-area">
 
-  <!-- Sheet music (real PDF), scrolls in sync with playback -->
-  <div id="sheet-area" hidden>
-    <div class="sheet-area-label">Sheet Music</div>
-    <div id="sheetScroll">
-      <div id="sheetPages"></div>
+    <!-- Sheet music (real PDF), scrolls in sync with playback -->
+    <div id="sheet-area" hidden>
+      <div class="sheet-area-label">Sheet Music</div>
+      <div id="sheetScroll">
+        <div id="sheetPages"></div>
+      </div>
     </div>
+
+    <!-- Visualizer area -->
+    <div id="viz-area">
+      <canvas id="vizCanvas" aria-label="Horizontal waveform visualizer for violin strings"></canvas>
+      <div class="note-name" id="movementDisplay"></div>
+      <div class="bpm-pulse" id="beatDisplay">♩ —</div>
+      <div id="liveNoteDisplay" aria-label="Live detected note">—</div>
+      <div id="timeline"><div id="timeline-fill"></div></div>
+    </div>
+
   </div>
 
 </div>

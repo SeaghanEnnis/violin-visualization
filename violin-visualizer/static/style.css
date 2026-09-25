@@ -28,6 +28,14 @@ body {
   overflow: hidden;
   border: 0.5px solid rgba(255, 255, 255, 0.07);
   position: relative;
+  transition: max-width 0.25s ease;
+}
+
+/* Grow the whole shell when there's sheet music to show, so it gets a
+   real amount of room instead of squeezing into the plain visualizer's
+   width — pieces without a PDF keep the original, cozier layout. */
+#app:has(#sheet-area:not([hidden])) {
+  max-width: 1500px;
 }
 
 /* ── Start screen ──────────────────────────────────────────────────── */
@@ -278,11 +286,23 @@ input[type="range"]::-moz-range-thumb {
   cursor: pointer;
 }
 
+/* ── Main area (sheet music + visualizer, side by side) ──────────────── */
+#main-area {
+  display: flex;
+  align-items: stretch;
+  /* Explicit, matching #viz-area's height — without it, the row's height
+     is derived from the tallest child, and #sheet-area's un-stretched
+     content height (a full scrollable page stack) is far taller than
+     640px, which then stretches BOTH children to that inflated height. */
+  height: 640px;
+}
+
 /* ── Visualizer area ───────────────────────────────────────────────── */
 #viz-area {
   position: relative;
-  width: 100%;
-  height: 380px;
+  flex: 1 1 auto;
+  min-width: 0;   /* let it shrink below its content size instead of overflowing */
+  height: 640px;
   overflow: hidden;
 }
 
@@ -374,7 +394,8 @@ canvas {
 /* ── Sheet music panel ─────────────────────────────────────────────── */
 #sheet-area {
   position: relative;
-  border-top: 0.5px solid rgba(255, 255, 255, 0.07);
+  flex: 0 0 560px;
+  border-right: 0.5px solid rgba(255, 255, 255, 0.07);
   background: #06060c;
 }
 
@@ -396,7 +417,7 @@ canvas {
 }
 
 #sheetScroll {
-  height: 480px;
+  height: 100%;   /* matches #viz-area's height via #main-area's flex stretch */
   overflow-y: auto;
   overflow-x: hidden;
   scroll-behavior: auto;
@@ -424,6 +445,19 @@ canvas {
 }
 
 /* ── Responsive ────────────────────────────────────────────────────── */
+/* Below this, a 560px sheet-music column would leave the visualizer too
+   squeezed to be useful — stack them instead. */
+@media (max-width: 960px) {
+  #main-area { flex-direction: column; height: auto; }
+  #viz-area { height: 340px; }
+  #sheet-area {
+    flex-basis: auto;
+    border-right: none;
+    border-bottom: 0.5px solid rgba(255, 255, 255, 0.07);
+  }
+  #sheetScroll { height: 420px; }
+}
+
 @media (max-width: 600px) {
   #controls { gap: 12px; padding: 12px 14px; }
   input[type="range"] { width: 72px; }
