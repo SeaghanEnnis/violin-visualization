@@ -202,7 +202,12 @@ async function renderSheetPages() {
     });
   }
 
-  sheetMaxScroll = Math.max(0, sheetPages.scrollHeight - sheetScroll.clientHeight);
+  //Guarantee enough bottom runway for ANY row — including the last one on a
+  //short, single-page piece — to reach the top of the viewport. A CSS vh
+  //value can't do this reliably since it's sized off the browser window,
+  //not this panel, so it's set here off the panel's actual clientHeight.
+  sheetPages.style.paddingBottom = sheetScroll.clientHeight + "px";
+  sheetMaxScroll = Math.max(0, sheetScroll.scrollHeight - sheetScroll.clientHeight);
   buildPixelAnchors();
 }
 
