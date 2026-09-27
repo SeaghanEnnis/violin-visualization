@@ -1,0 +1,33 @@
+X:1
+T:Tarantella
+C:Leonardi
+M:6/8
+L:1/8
+Q:1/8=220
+K:Amin
+
+
+% Uppercase is lower octave B, = B3, A = A4, b = B5, c` = C6
+% One line per system of sheets/Leonardi_Tarantella.pdf (10 rows, 65 bars). L:1/8, so a bare
+% letter is an eighth, 2 is a quarter. A sharp holds for the rest of its bar, as in the score.
+%%syncpage page=1 rows=10
+%%sync page=1 row=1
+efe dBc | ded cAB | cdc BcB | ABA E2 z | efe dBc | ded cAB |
+%%sync page=1 row=2
+cBA ^GFE | DCB, A,2 z | efe dBc | ded cAB | cdc BcB | ABA E2 z | efe dBc |
+%%sync page=1 row=3
+ded cAB | cBA Bcd | e^f^g a2 z | EEE ^GGG | BBB AAA | ccc BBB | ddd cBA |
+%%sync page=1 row=4
+eee ^ggg | bbb aaa | fgf efe | dcB A2 z | EEE ^GGG | BBB AAA |
+%%sync page=1 row=5
+ccc BBB | ddd cBA | eee ^ggg | bbb aaa | fgf efe | dcB A2 z | (ee)e (de)e |
+%%sync page=1 row=6
+(Be)e (ce)e | (Ae)e (Be)e | (de)e (ce)e | (ee)e (de)e | (Be)e (ce)e | (Ae)e Bcd | e^f^g a2 z |
+%%sync page=1 row=7
+(ee)e (de)e | (Be)e (ce)e | (Ae)e (Be)e | (de)e (ce)e | (ee)e (de)e | (Be)e (ce)e | (Ae)e Bcd |
+%%sync page=1 row=8
+e^f^g a2 z | z ee e^gg | ^gbb b a2 | z fg fef | edc B A2 | z e^d e^ge |
+%%sync page=1 row=9
+^gbg b a2 | z fg fef | edc BA^D | E^F^G ABc | de^f ^ga^D | E^F^G ABc |
+%%sync page=1 row=10
+de^f ^g(ae) | e(^ge) e(ae) | e(be) e(ae) | e(^ge) e(ae) | e(be) ea z | z [Eca] z z2 z |]

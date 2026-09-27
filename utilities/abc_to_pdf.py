@@ -38,13 +38,18 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 <script src="{abcjs_url}"></script>
 <style>
   body {{ margin: 0; padding: 28px; background: #fff; }}
+  /* one SVG per staff line, and never split a line across pages */
+  #paper svg {{ display: block; break-inside: avoid; }}
 </style>
 </head>
 <body>
   <div id="paper"></div>
   <script>
     window.renderDone = false;
-    ABCJS.renderAbc("paper", {abc_json}, {{ staffwidth: 680 }});
+    // oneSvgPerLine: a single tall SVG can't be split across pages, so a piece
+    // longer than one page came out blank. Per-line SVGs let Chromium break
+    // between systems.
+    ABCJS.renderAbc("paper", {abc_json}, {{ staffwidth: 680, oneSvgPerLine: true }});
     window.renderDone = true;
   </script>
 </body>
