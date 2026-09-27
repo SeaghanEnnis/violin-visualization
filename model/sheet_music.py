@@ -271,9 +271,6 @@ class Measure:
         repeat_end:    Repeat barline at the end of this measure.
         tempo:         BPM override for this measure (None = inherit from score).
         rehearsal_mark: Optional rehearsal letter/number (e.g., "A", "1").
-        sync:          Optional (page, row) tying this measure to a page/system in a
-                       companion PDF, from a `%%sync page=N row=M` directive placed
-                       just before it in the source ABC.
     """
     number:         int                          = 1
     time_signature: Optional[TimeSignature]      = None
@@ -285,7 +282,6 @@ class Measure:
     repeat_end:     bool                         = False
     tempo:          Optional[float]              = None
     rehearsal_mark: Optional[str]                = None
-    sync:           Optional[tuple[int, int]]    = None
 
     def add_event(self, event: NoteEvent | Chord, voice: int = 1) -> Measure:
         """Appends a NoteEvent or Chord to the specified voice, auto-computing position."""
@@ -366,9 +362,8 @@ class SheetMusic:
         tracks:         Ordered list of Track objects (instruments/voices).
         metadata:       Arbitrary extra metadata (copyright, publisher, etc.).
         sync_page_rows: Declared system count per PDF page, from `%%syncpage page=N
-                       rows=M` directives — lets sync anchors (Measure.sync) divide a
-                       page's height accurately even when only some of its systems
-                       have been tagged so far.
+                       rows=M` directives — used to sanity-check (and, if needed,
+                       stand in for) automatic staff detection on the PDF page.
     """
     title:          str                     = "Untitled"
     composer:       str                     = "Unknown"

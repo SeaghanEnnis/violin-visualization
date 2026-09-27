@@ -9,6 +9,7 @@ import sys
 import logging
 import atexit
 import threading
+import time
 from collections import deque
 from pathlib import Path
 import numpy as np
@@ -37,7 +38,10 @@ app = Flask(__name__)
 #2048 @ 44.1kHz ≈ 46ms/block t.
 _WINDOW_SIZE   = 2048
 _THRESHOLD     = 0.01
-_live_note     = {"note": None, "freq": 0.0}
+#seq counts audio blocks and stamp is when the latest one arrived (perf_counter
+#clock), so Points mode can tell fresh readings from repeats of the same
+#block and work out when each one was actually played.
+_live_note     = {"note": None, "freq": 0.0, "seq": 0, "stamp": 0.0}
 _note_lock     = threading.Lock()
 _target_sr     = 44100
 _stream        = None
@@ -71,14 +75,21 @@ def _freq_to_note(freq):
         return None
     return librosa.midi_to_note(int(round(librosa.hz_to_midi(freq))), unicode=False)
 
+def _publish_block(note, freq, stamp):
+    """Record the latest block's reading. Called with the lock NOT held."""
+    with _note_lock:
+        _live_note["note"]  = note
+        _live_note["freq"]  = freq
+        _live_note["seq"]  += 1
+        _live_note["stamp"] = stamp
+
 def _audio_callback(indata, _frames, _time, _status):
+    arrived = time.perf_counter()   # taken first: yin below takes a few ms
     audio  = indata[:, 0].astype(np.float64)
     volume = np.sqrt(np.mean(audio ** 2))
     if volume < _THRESHOLD:
         _note_history.clear()
-        with _note_lock:
-            _live_note["note"] = None
-            _live_note["freq"] = 0.0
+        _publish_block(None, 0.0, arrived)
         return
 
     #YIN (autocorrelation-based, deterministic): constrained to the violin's
@@ -96,9 +107,7 @@ def _audio_callback(indata, _frames, _time, _status):
     #smoothing
     _note_history.append(note)
     smoothed = max(set(_note_history), key=list(_note_history).count)
-    with _note_lock:
-        _live_note["note"] = smoothed
-        _live_note["freq"] = freq
+    _publish_block(smoothed, freq, arrived)
 
 def _start_audio():
     """Open the InputStream in the main thread (same as audio_listener/audio_reader.py).
@@ -165,12 +174,13 @@ def _abc_to_score_json(sheet) -> tuple[list[dict], list[dict]]:
 
     for track in sheet.tracks:
         for measure in track.measures:
-            if measure.sync:
-                page, row = measure.sync
-                sync_anchors.append({"t": round(t, 4), "page": page, "row": row})
             for beat in measure.beats:
                 ev  = beat.event
                 dur = ev.duration.value * BEATS_PER_WHOLE
+
+                sync = getattr(ev, "_sync", None)
+                if sync:
+                    sync_anchors.append({"t": round(t, 4), "page": sync[0], "row": sync[1]})
 
                 if isinstance(ev, NoteEvent):
                     if ev.is_rest or ev.note is None:
@@ -246,7 +256,20 @@ def _read_abc_meta(path: Path) -> tuple[str, str, float]:
 @app.route("/api/live-note")
 def live_note():
     with _note_lock:
-        return jsonify({"note": _live_note["note"], "freq": round(_live_note["freq"], 2)})
+        stamp = _live_note["stamp"]
+        return jsonify({
+            "note":       _live_note["note"],
+            "freq":       round(_live_note["freq"], 2),
+            #For Points mode's timing: which block this is, how long ago it
+            #arrived, and how long a block is. (How long the device sat on the
+            #audio before handing it over isn't reliably reported — PortAudio's
+            #figures for it contradicted each other on the real mic — so the
+            #frontend applies an adjustable allowance instead.)
+            "seq":        _live_note["seq"],
+            "age_ms":     round((time.perf_counter() - stamp) * 1000, 1) if stamp else None,
+            "block_ms":   round(_WINDOW_SIZE / _target_sr * 1000, 1),
+            "mic":        _stream is not None,
+        })
 
 
 @app.route("/")

@@ -24,5 +24,24 @@ z4 | z4 | z4 | z4 | ( f b ) ( f e ) | ( d c ) (B F) | (G F/2 G/2) (B A/2 G/2) |
 %%sync page=1 row=4
 ( F3/2  D/2) B,2 | (^A,3/2 B,/2) (C/2 ^A,/2 B,/2 C/2) | (D F) (G B) | (F/2 G/2 G/2 d) (d3/2 c/2) | B2 z2 |
 %%sync page=1 row=5
+( f b ) ( f ^g ) | (a3/2 ^g/2) ( f e d c) | (B c/2 d/2) (c B) | (B/2 A/2 d/2 c/2) c2 |
+%%sync page=1 row=6
+(B a) (^g f) | (b/2 a/2 e/2 f/2) | (^g/2 a e c) | (B/2 c d B/2)| (^G/2 E/2 D/2 B,/2) | A,2 (a, b,) |
+%%sync page=1 row=7
+(D C) (C D) | (F E) (E F) | (A3/2 G/2) (B/2 A/2 G/2 F/2) | (E/2 F/2 G/2 A/2) (B/2 c/2 d/2 e/2) |
+%%sync page=1 row=8
+f2 d2 | B2 g2 | (A a) (g e) | (g3/2 f) f2 |
+%%sync page=1 row=9
+d2 B2 | G2 e2 | (e c) (d D) | (=F3/2 E/2) E2 |
+%%sync page=1 row=10
+(F/2 G/2 A/2 G/2) (F/2 E/2 D/2 C/2) | (B,/2 D/2 G/2 B/2) D2 | (c/2 d/2 e/2 d/2) (c/2 B/2 A/2 G/2) |
+%%syncpage page=1 rows=10
+%%sync page=2 row=1
+(F/2 A/2 d/2 f/2) a3/2  (f/2 | ^a3/2) (f/2 b) (B/2 c/2 | d) (D/2 E/2 =F) (E/2 D/2 |
+%%sync page=2 row=2
+F) A,/2 B,/2 (C/2 D/2) E/2 F/2 | (G/2 F/2) E/2 F/2 (G/2 A/2 B/2 c/2) | (d3/2 c/2) (e/2 d/2 A/2 B/2) |
+%%sync page=2 row=3
+(c a) (g e) | (d3/2 c/2) (e/2 d/2 A/2 B/2) | (c a) (g e) | d2 z2 | z4 |
+%%sync page=2 row=4
 z4 |
 |]

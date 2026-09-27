@@ -11,6 +11,7 @@
 import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/build/pdf.min.mjs";
 pdfjsLib.GlobalWorkerOptions.workerSrc =
   "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.6.82/build/pdf.worker.min.mjs";
+import { Scorer, freqToMidi, gradeFor } from "./scoring.js";
 
 // State
 let STRINGS       = [];
@@ -59,81 +60,230 @@ const liveNoteDisplay  = document.getElementById("liveNoteDisplay");
 const sheetArea        = document.getElementById("sheet-area");
 const sheetScroll      = document.getElementById("sheetScroll");
 const sheetPages       = document.getElementById("sheetPages");
+const sheetRowHighlight = document.getElementById("sheetRowHighlight");
+const appEl            = document.getElementById("app");
+const scoreHud         = document.getElementById("scoreHud");
+const noteFeedback     = document.getElementById("noteFeedback");
+const countInEl        = document.getElementById("countIn");
+const resultsEl        = document.getElementById("results");
 
 // ── Sheet-music PDF sync ─────────────────────────────────────────────────────
-// Scroll position tracks songPos against PIXEL_ANCHORS — {t, y} points built
-// from %%sync page/row tags in the ABC source (see sheet_music_reader.py),
-// linearly interpolated between them. With fewer than two anchors we fall
-// back to a uniform songPos/SONG_DURATION mapping onto the PDF's total
-// scroll height, which drifts on pieces with uneven engraving but at least
-// keeps moving in lockstep with tempo.
+// Scroll position follows songPos through PIXEL_ANCHORS — {t, y} points built
+// from %%sync page/row tags in the ABC source (see sheet_music_reader.py): the
+// view holds at a row's y while it plays and eases to the next row's y as that
+// row starts (see interpolateSheetAnchors). Where each row really sits on the
+// page is found by scanning the rendered page for its staves
+// (detectStaffSystems), so title blocks, margins and blank paper don't distort
+// the spacing; if that can't be trusted the rows are assumed evenly spaced down
+// the page. With no tags at all we fall back to a uniform songPos/SONG_DURATION
+// mapping onto the PDF's total scroll height, which drifts on pieces with
+// uneven engraving but at least keeps moving in lockstep with tempo.
 let pdfDoc          = null;
 let currentPdfUrl   = null;
 let sheetMaxScroll  = 0;
 let SYNC_ANCHORS    = [];      // raw {t, page, row} from the API
 let SYNC_PAGE_ROWS  = {};      // declared {page: totalRows} from %%syncpage, keyed by string
-let PAGE_META       = [];      // [{top, height}] per PDF page, 0-indexed
+let PAGE_META       = [];      // [{top, height, left, width}] per PDF page, 0-indexed
+let PAGE_SYSTEMS    = {};      // {pageNum: {systems:[{top}], staffGap} | null} detected staves, as fractions of page height
 let PIXEL_ANCHORS   = [];      // [{t, y}] resolved from SYNC_ANCHORS + PAGE_META, sorted by t
+let ROW_BANDS       = [];      // [{t, page, top, bottom}] the strip to highlight for each tagged row, sorted by t
+let highlightedBand = -2;      // index into ROW_BANDS currently shown (-1 = none, -2 = needs placing)
 let userScrolling   = false;   // true while the user is actively/recently interacting
 let snapping        = false;   // true while catching back up to the time-derived position
 let userScrollTimer = null;
+//The view holds still while a row plays, and eases to the next row only once
+//that row has started — so the last measures of a row, which you're reading
+//ahead into the next row from, never move under you.
+//  LOOKBACK_ROWS: where the held row sits, in rows below the top of the panel,
+//    so the previous row stays visible above it for context.
+//  GLIDE_BEATS: how long the ease to the next row takes, counted from that
+//    row's first beat (a bar's worth by default), and never more than
+//    GLIDE_MAX_FRACTION of the row so a short row still settles.
+const SCROLL_LOOKBACK_ROWS  = 1;
+const SCROLL_GLIDE_BEATS    = 4;
+const SCROLL_GLIDE_MAX_FRACTION = 0.4;
 const SNAP_INACTIVITY_MS = 900;   // how long to leave the user alone after they scroll
 const SNAP_CATCHUP       = 0.22;  // fraction of the gap closed per animation frame
 const SNAP_DONE_PX       = 1.5;
 
-//Builds {t, y} pixel anchors from the raw page/row sync tags. Rows-per-page
-//comes from a %%syncpage declaration when the ABC source has one; otherwise
-//it's inferred as the highest row number tagged so far on that page, which
-//only comes out right once every system on the page has been tagged.
-function buildPixelAnchors() {
-  PIXEL_ANCHORS = [];
-  if (!SYNC_ANCHORS.length || !PAGE_META.length) return;
+//Finds the staff systems on a PDF page: renders it offscreen at a fixed
+//scale and scans for long horizontal ink runs (the staff lines — everything
+//else on the page, notes and text and beams, spans far less of the width),
+//then groups those into systems. Positions come back as fractions of the
+//page height so they hold at any display size. Null if nothing staff-like.
+async function detectStaffSystems(pageNum) {
+  const page     = await pdfDoc.getPage(pageNum);
+  const viewport = page.getViewport({ scale: 2 });
+  const off      = document.createElement("canvas");
+  off.width  = Math.ceil(viewport.width);
+  off.height = Math.ceil(viewport.height);
+  const octx = off.getContext("2d", { willReadFrequently: true });
+  await page.render({ canvasContext: octx, viewport }).promise;
 
-  const rowsPerPage = {};
-  SYNC_ANCHORS.forEach(a => {
-    rowsPerPage[a.page] = Math.max(rowsPerPage[a.page] || 0, a.row);
-  });
-  Object.entries(SYNC_PAGE_ROWS).forEach(([page, rows]) => {
-    rowsPerPage[page] = rows;
-  });
+  const { data, width: W, height: H } = octx.getImageData(0, 0, off.width, off.height);
 
-  PIXEL_ANCHORS = SYNC_ANCHORS
-    .map(a => {
-      const meta = PAGE_META[a.page - 1];
-      if (!meta) return null;
-      const rowH = meta.height / rowsPerPage[a.page];
-      return { t: a.t, y: meta.top + (a.row - 1) * rowH };
-    })
-    .filter(Boolean)
-    .sort((a, b) => a.t - b.t);
-}
-
-function sheetTargetScrollTop() {
-  if (PIXEL_ANCHORS.length >= 2) return interpolateSheetAnchors(songPos);
-  const ratio = SONG_DURATION > 0 ? Math.max(0, Math.min(1, songPos / SONG_DURATION)) : 0;
-  return ratio * sheetMaxScroll;
-}
-
-function interpolateSheetAnchors(t) {
-  const anchors = PIXEL_ANCHORS;
-  if (t <= anchors[0].t) return anchors[0].y;
-
-  for (let i = 0; i < anchors.length - 1; i++) {
-    const a = anchors[i], b = anchors[i + 1];
-    if (t <= b.t) {
-      const frac = b.t === a.t ? 0 : (t - a.t) / (b.t - a.t);
-      return a.y + (b.y - a.y) * frac;
+  const isLineRow = new Uint8Array(H);
+  for (let y = 0; y < H; y++) {
+    let dark = 0;
+    for (let x = 0, i = y * W * 4; x < W; x++, i += 4) {
+      //Composite over white so a transparent page background isn't read as black
+      const a    = data[i + 3] / 255;
+      const gray = 255 - a * (255 - (data[i] + data[i + 1] + data[i + 2]) / 3);
+      if (gray < 170) dark++;
     }
+    isLineRow[y] = dark / W >= 0.4 ? 1 : 0;
   }
 
-  //Past the last tagged row: keep advancing toward the bottom of the sheet
-  //at the same time/space rate as the piece's overall remaining runway,
-  //rather than freezing at the last known anchor.
-  const last = anchors[anchors.length - 1];
-  const remainingT = SONG_DURATION - last.t;
-  if (remainingT <= 0) return last.y;
-  const frac = Math.max(0, Math.min(1, (t - last.t) / remainingT));
-  return last.y + (sheetMaxScroll - last.y) * frac;
+  //Consecutive line rows are one staff line (allowing a 2px antialiasing gap)
+  const lines = [];
+  let runStart = -1, runEnd = -1;
+  for (let y = 0; y < H; y++) {
+    if (isLineRow[y]) {
+      if (runStart < 0) runStart = y;
+      runEnd = y;
+    } else if (runStart >= 0 && y - runEnd > 2) {
+      lines.push((runStart + runEnd) / 2);
+      runStart = -1;
+    }
+  }
+  if (runStart >= 0) lines.push((runStart + runEnd) / 2);
+  if (lines.length < 4) return null;
+
+  //Lines within a staff sit one staffGap apart; systems are separated by far more
+  const gaps     = lines.slice(1).map((y, i) => y - lines[i]);
+  const minGap   = Math.min(...gaps);
+  const small    = gaps.filter(g => g <= minGap * 1.6).sort((a, b) => a - b);
+  const staffGap = small[Math.floor(small.length / 2)];
+
+  const groups = [];
+  let cur = [lines[0]];
+  gaps.forEach((g, i) => {
+    if (g > staffGap * 2.2) { groups.push(cur); cur = []; }
+    cur.push(lines[i + 1]);
+  });
+  groups.push(cur);
+
+  const systems = groups.filter(g => g.length >= 4).map(g => ({ top: g[0] / H }));
+  return systems.length ? { systems, staffGap: staffGap / H } : null;
+}
+
+//Detects staves on just the pages the ABC actually tags (cached per PDF).
+async function detectTaggedPages() {
+  const pages = [...new Set(SYNC_ANCHORS.map(a => a.page))];
+  for (const p of pages) {
+    if (p in PAGE_SYSTEMS || p > pdfDoc.numPages) continue;
+    try {
+      PAGE_SYSTEMS[p] = await detectStaffSystems(p);
+    } catch (err) {
+      console.warn(`Staff detection failed on page ${p}:`, err);
+      PAGE_SYSTEMS[p] = null;
+    }
+  }
+}
+
+//Where a page's rows sit, in scroll-content pixels: {rows, rowY(row), rowBand(row)}
+//— rowY is where to scroll to for a row, rowBand the {top, bottom} strip to
+//highlight while it plays. Uses the detected staves when they agree with the
+//row count (declared by %%syncpage, else the highest row tagged); otherwise
+//spaces the rows evenly down the page, which is only right for a page the
+//music fills edge to edge.
+function pageRowLayout(page, maxTaggedRow) {
+  const meta = PAGE_META[page - 1];
+  if (!meta) return null;
+
+  const declared = SYNC_PAGE_ROWS[page];
+  const found    = PAGE_SYSTEMS[page];
+  const trusted  = found && (declared ? found.systems.length === declared
+                                      : found.systems.length >= maxTaggedRow);
+  if (found && declared && !trusted) {
+    console.warn(`Page ${page}: found ${found.systems.length} staves but %%syncpage declares ${declared} rows — spacing the rows evenly instead.`);
+  }
+
+  if (trusted) {
+    //Sit a little above the top staff line so measure numbers, tempo marks
+    //and high notes stay in view rather than being clipped by the panel edge.
+    const staffH = found.staffGap * meta.height * 4;   // five lines = four gaps
+    const lead   = staffH;
+    const tops   = found.systems.map(s => meta.top + s.top * meta.height);
+    //Highlight = the staff plus half the space to its neighbour on either
+    //side, so the bands tile the page and take in the stems, dynamics and
+    //measure numbers that sit around the staff.
+    const pitchAt = i => i + 1 < tops.length ? tops[i + 1] - tops[i]
+                       : i > 0               ? tops[i] - tops[i - 1]
+                       :                       staffH * 3;
+    const buffer = SCROLL_LOOKBACK_ROWS * (tops.length > 1 ? (tops[tops.length - 1] - tops[0]) / (tops.length - 1) : staffH * 3);
+    return {
+      rows: tops.length,
+      rowY: row => tops[row - 1] - lead - buffer,
+      rowBand: row => {
+        const i = row - 1, margin = Math.max(0, (pitchAt(i) - staffH) / 2);
+        return { top: tops[i] - margin, bottom: tops[i] + staffH + margin };
+      },
+    };
+  }
+
+  const rows = declared || maxTaggedRow;
+  const rowH = meta.height / rows;
+  return {
+    rows,
+    rowY: row => meta.top + (row - 1) * rowH - SCROLL_LOOKBACK_ROWS * rowH,
+    rowBand: row => ({ top: meta.top + (row - 1) * rowH, bottom: meta.top + row * rowH }),
+  };
+}
+
+//Builds {t, y} pixel anchors from the raw page/row sync tags.
+function buildPixelAnchors() {
+  PIXEL_ANCHORS = [];
+  ROW_BANDS     = [];
+  highlightedBand = -2;   // force the highlight to re-place itself against the new layout
+  if (!SYNC_ANCHORS.length || !PAGE_META.length) return;
+
+  const maxRow = {};
+  SYNC_ANCHORS.forEach(a => { maxRow[a.page] = Math.max(maxRow[a.page] || 0, a.row); });
+  const layouts = {};
+  Object.keys(maxRow).forEach(p => { layouts[p] = pageRowLayout(Number(p), maxRow[p]); });
+
+  const resolved = SYNC_ANCHORS
+    .map(a => layouts[a.page] && { t: a.t, y: layouts[a.page].rowY(a.row), page: a.page, row: a.row })
+    .filter(Boolean)
+    .sort((a, b) => a.t - b.t);
+  if (!resolved.length) return;
+
+  PIXEL_ANCHORS = resolved.map(({ t, y }) => ({ t, y }));
+  ROW_BANDS     = resolved.map(r => ({ t: r.t, page: r.page, ...layouts[r.page].rowBand(r.row) }));
+}
+
+//Where the sheet should be scrolled to right now — never past the end of the
+//last page. Near the end of a piece (or all through one whose pages barely
+//exceed the panel) the ideal position (the current row SCROLL_LOOKBACK_ROWS
+//below the top) lies beyond what can scroll, so the view just rests at the
+//bottom of the document.
+function sheetTargetScrollTop() {
+  let y;
+  if (PIXEL_ANCHORS.length) {
+    y = interpolateSheetAnchors(songPos);
+  } else {
+    const ratio = SONG_DURATION > 0 ? Math.max(0, Math.min(1, songPos / SONG_DURATION)) : 0;
+    y = ratio * sheetMaxScroll;
+  }
+  return Math.max(0, Math.min(y, sheetMaxScroll));
+}
+
+//Hold at the current row's y, easing over from the previous row's y during
+//the opening beats of this row. (Easing after the row starts rather than
+//before it means a row's final measures are read from a view that isn't
+//moving.)
+function interpolateSheetAnchors(t) {
+  const anchors = PIXEL_ANCHORS;
+  for (let i = anchors.length - 1; i > 0; i--) {
+    if (t < anchors[i].t) continue;              // not into this row yet
+    const rowLen = i + 1 < anchors.length ? anchors[i + 1].t - anchors[i].t : Infinity;
+    const glide  = Math.min(SCROLL_GLIDE_BEATS, SCROLL_GLIDE_MAX_FRACTION * rowLen);
+    const f      = glide > 0 ? Math.min(1, (t - anchors[i].t) / glide) : 1;
+    const eased  = f * f * (3 - 2 * f);          // smoothstep: gentle at both ends
+    return anchors[i - 1].y + (anchors[i].y - anchors[i - 1].y) * eased;
+  }
+  return anchors[0].y;                           // the first row, or before it
 }
 
 function beginUserScroll() {
@@ -149,9 +299,47 @@ sheetScroll.addEventListener("wheel", beginUserScroll, { passive: true });
 sheetScroll.addEventListener("touchstart", beginUserScroll, { passive: true });
 sheetScroll.addEventListener("pointerdown", beginUserScroll);
 
+//Moves the highlight band to whichever tagged row songPos is currently in
+//(the last one whose start time has passed). Only touches the DOM when the
+//row actually changes; hidden before the first tagged row or with no tags.
+function updateRowHighlight() {
+  let idx = -1;
+  if (pdfDoc) {
+    for (let i = ROW_BANDS.length - 1; i >= 0; i--) {
+      if (songPos >= ROW_BANDS[i].t) { idx = i; break; }
+    }
+  }
+  if (idx === highlightedBand) return;
+
+  const wasShown = highlightedBand >= 0;
+  highlightedBand = idx;
+  if (idx < 0) {
+    sheetRowHighlight.style.display = "none";
+    return;
+  }
+
+  const band = ROW_BANDS[idx];
+  const meta = PAGE_META[band.page - 1];
+  if (!meta) { sheetRowHighlight.style.display = "none"; return; }
+
+  //Appearing (first show, or after a re-layout) shouldn't glide in from
+  //wherever it last was — only row-to-row changes animate.
+  if (!wasShown) sheetRowHighlight.style.transition = "none";
+  sheetRowHighlight.style.display = "block";
+  sheetRowHighlight.style.left    = meta.left + "px";
+  sheetRowHighlight.style.width   = meta.width + "px";
+  sheetRowHighlight.style.top     = band.top + "px";
+  sheetRowHighlight.style.height  = (band.bottom - band.top) + "px";
+  if (!wasShown) {
+    void sheetRowHighlight.offsetHeight;   // commit the un-animated position
+    sheetRowHighlight.style.transition = "";
+  }
+}
+
 //Runs every frame regardless of play/pause so the sheet snaps into place
 //immediately on load/scrub and still catches up while paused.
 function sheetScrollLoop() {
+  updateRowHighlight();
   if (pdfDoc && sheetMaxScroll > 0 && !userScrolling) {
     const target = sheetTargetScrollTop();
     if (snapping) {
@@ -176,6 +364,7 @@ async function renderSheetPages() {
   const targetWidth = sheetScroll.clientWidth * 0.92;
   const dpr = window.devicePixelRatio || 1;
   PAGE_META = [];
+  ROW_BANDS = [];   // the old bands no longer match the pages; the highlight hides until rebuilt
 
   for (let i = 1; i <= pdfDoc.numPages; i++) {
     const page = await pdfDoc.getPage(i);
@@ -199,15 +388,16 @@ async function renderSheetPages() {
     PAGE_META.push({
       top:    canvasRect.top - scrollRect.top + sheetScroll.scrollTop,
       height: canvasRect.height,
+      left:   canvasRect.left - scrollRect.left,
+      width:  canvasRect.width,
     });
   }
 
-  //Guarantee enough bottom runway for ANY row — including the last one on a
-  //short, single-page piece — to reach the top of the viewport. A CSS vh
-  //value can't do this reliably since it's sized off the browser window,
-  //not this panel, so it's set here off the panel's actual clientHeight.
-  sheetPages.style.paddingBottom = sheetScroll.clientHeight + "px";
+  //The scrollable range is exactly the pages — no runway past the last one.
+  //(Padding there would let late rows reach the top of the panel, but only by
+  //scrolling the page away and showing an empty void, as if the PDF went on.)
   sheetMaxScroll = Math.max(0, sheetScroll.scrollHeight - sheetScroll.clientHeight);
+  await detectTaggedPages();
   buildPixelAnchors();
 }
 
@@ -220,6 +410,7 @@ async function loadSheetPdf(url, syncAnchors, syncPageRows) {
     pdfDoc = null;
     currentPdfUrl = null;
     PIXEL_ANCHORS = [];
+    ROW_BANDS     = [];
     return;
   }
 
@@ -229,12 +420,14 @@ async function loadSheetPdf(url, syncAnchors, syncPageRows) {
   clearTimeout(userScrollTimer);
 
   if (url === currentPdfUrl && pdfDoc) {
-    buildPixelAnchors();   // page layout is already known; anchors may have changed pieces
+    await detectTaggedPages();   // page layout is already known; the tags may have changed
+    buildPixelAnchors();
     sheetScroll.scrollTop = sheetTargetScrollTop();
     return;
   }
 
   currentPdfUrl = url;
+  PAGE_SYSTEMS  = {};   // detected staves belong to the previous document
   try {
     pdfDoc = await pdfjsLib.getDocument(url).promise;
     await renderSheetPages();
@@ -303,6 +496,7 @@ async function loadScore(pieceId) {
     time          = 0;
     holdStart     = null;
     advanceTarget = null;
+    if (mode === "points") preparePointsRun();   // new piece = new run
     pieceTitle.textContent = data.piece.title;
     pieceSub.textContent   = `${data.piece.composer} · ${data.piece.instrument}`;
     if (data.piece.tempo) {
@@ -371,7 +565,11 @@ function getCurrentEvent(pos) {
   for (let i = SCORE.length - 1; i >= 0; i--) {
     if (pos >= SCORE[i].t) return SCORE[i];
   }
-  return SCORE[0] || { notes: [], dynamic: 0.5, bow: "down", name: "" };
+  //Before the first event (Points mode's count-in): nothing is current yet —
+  //returning SCORE[0] would light its lane up and animate a note that hasn't
+  //arrived.
+  if (SCORE.length) return { notes: [], pitches: {}, dynamic: 0, bow: "down", name: "", rest: true, t: pos, dur: 0 };
+  return { notes: [], dynamic: 0.5, bow: "down", name: "" };
 }
 
 function isNoteCorrect(note) {
@@ -439,7 +637,7 @@ function drawFrame() {
     ctx.font      = `400 ${Math.round(9 * dpr)}px Inter, system-ui, sans-serif`;
     ctx.fillStyle = "rgba(255,255,255,0.1)";
     ctx.textAlign = "left";
-    ctx.fillText(`M${Math.round(bar / 4) + 1}`, bx + 4 * dpr, 11 * dpr);
+    if (bar >= 0) ctx.fillText(`M${Math.round(bar / 4) + 1}`, bx + 4 * dpr, 11 * dpr);   // no "M0" in a count-in
   }
 
   STRINGS.forEach((str, si) => {
@@ -742,8 +940,8 @@ function drawFrame() {
     }
   });
 
-  //Beat metronome flash
-  const beatPhase = (time * beatsPerSec) % 1;
+  //Beat metronome flash (Points pulses off the song clock, so it agrees with the notes)
+  const beatPhase = mode === "points" ? ((songPos % 1) + 1) % 1 : (time * beatsPerSec) % 1;
   if (playing && beatPhase < 0.12) {
     const t = 1 - beatPhase / 0.12;
     const glow = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, H * 0.6);
@@ -763,6 +961,255 @@ function drawFrame() {
   ctx.stroke();
 }
 
+// ── Points mode ──────────────────────────────────────────────────────────────
+// Plays like Play Along, but every note is scored (see scoring.js) from what
+// the mic hears. The mic and the song run on different clocks, so each mic
+// reading is stamped with when it was captured and placed on the song clock
+// via posHistory; the scorer never sees wall-clock time.
+const COUNT_IN_BEATS = 4;   // lead-in before the piece starts, so the first note is fair
+const MODE_LABELS    = { "play-along": "Play Along", "wait-for-me": "Wait for Me", "points": "Points" };
+let scorer       = null;
+let posHistory   = [];      // [{ts, pos}] recent (frame time, songPos) pairs
+let lastMicSeq   = -1;      // last mic block taken, so a block polled twice counts once
+let micBlockSec  = 0.05;    // mic block length, from the server
+
+//How long the audio device sits on sound before handing it over, beyond the
+//block's own length. Nothing can measure this reliably (PortAudio's own
+//figures for it disagreed on the real mic), so it's an allowance: a middle
+//guess by default, adjustable from the results screen, remembered.
+const MIC_DELAY_KEY = "violin.micDelayMs";
+const MIC_DELAY_DEFAULT_MS = 100;
+let micDelayMs = (() => {
+  try {
+    const v = parseInt(localStorage.getItem(MIC_DELAY_KEY), 10);
+    return Number.isFinite(v) ? v : MIC_DELAY_DEFAULT_MS;
+  } catch (_) { return MIC_DELAY_DEFAULT_MS; }
+})();
+function saveMicDelay() {
+  try { localStorage.setItem(MIC_DELAY_KEY, String(micDelayMs)); } catch (_) { /* private mode etc. */ }
+}
+
+const hudScore   = document.getElementById("hudScore");
+const hudTempo   = document.getElementById("hudTempo");
+const hudNotes   = document.getElementById("hudNotes");
+const hudTune    = document.getElementById("hudTune");
+const hudWarn    = document.getElementById("hudWarn");
+
+//Song beats per second — Play Along's rate, so Points runs at the same speed
+const songRate = bpm => bpm / 72;
+
+const ICON_PLAY  = '<i class="ti ti-player-play" aria-hidden="true"></i>';
+const ICON_PAUSE = '<i class="ti ti-player-pause" aria-hidden="true"></i>';
+
+//The pitches an event asks for (empty for a rest)
+function expectedMidis(ev) {
+  return (ev.notes || [])
+    .map(n => ev.pitches?.[n])
+    .filter(Boolean)
+    .map(noteToMidi)
+    .filter(m => m !== null);
+}
+
+//Show or hide everything that belongs to the chosen mode
+function applyModeUi() {
+  const pts = mode === "points";
+  appEl.classList.toggle("mode-points", pts);
+  modeBadge.textContent = MODE_LABELS[mode] ?? "Play Along";
+  scoreHud.hidden   = !pts;
+  countInEl.hidden  = true;
+  resultsEl.hidden  = true;
+  noteFeedback.classList.remove("show");
+}
+
+//Fresh scorer, and the song clock parked in the count-in
+function preparePointsRun() {
+  scorer = new Scorer(SCORE.map(ev => ({ t: ev.t, dur: ev.dur, midis: expectedMidis(ev) })));
+  posHistory = [];
+  lastMicSeq = -1;
+  songPos    = -COUNT_IN_BEATS;
+  time       = 0;
+  resultsEl.hidden = true;
+  noteFeedback.classList.remove("show");
+  hudWarn.hidden = true;
+  updateHud();
+}
+
+function recordPos(ts) {
+  posHistory.push({ ts, pos: songPos });
+  if (posHistory.length > 180) posHistory.shift();
+}
+
+//songPos at an earlier wall-clock moment (performance.now() time), or null
+//if the frame history doesn't reach back that far (e.g. before a resume)
+function songPosAt(wall) {
+  const h = posHistory;
+  if (h.length < 2 || wall < h[0].ts) return null;
+  const last = h[h.length - 1];
+  if (wall >= last.ts) return last.pos + (wall - last.ts) / 1000 * songRate(parseInt(tempoSlider.value, 10));
+  for (let i = h.length - 1; i > 0; i--) {
+    if (h[i - 1].ts <= wall) {
+      const a = h[i - 1], b = h[i];
+      return a.pos + (b.pos - a.pos) * ((wall - a.ts) / ((b.ts - a.ts) || 1));
+    }
+  }
+  return null;
+}
+
+//One /api/live-note response → one scorer sample, if it's a block we haven't seen
+function takeMicReading(data, respondedAt) {
+  if (!scorer) return;
+  hudWarn.hidden = data.mic !== false;
+  if (data.seq === undefined || data.seq === lastMicSeq || data.age_ms == null) return;
+  lastMicSeq = data.seq;
+  if (data.block_ms) micBlockSec = data.block_ms / 1000;
+
+  //When the audio was actually played, on this page's clock: the middle of
+  //the block, before it reached the server (age), before the device handed
+  //it over (micDelayMs).
+  const capturedAt = respondedAt - data.age_ms - (data.block_ms || 0) / 2 - micDelayMs;
+  const p = songPosAt(capturedAt);
+  if (p === null) return;
+  scorer.addSample({ p, midiF: data.freq > 0 ? freqToMidi(data.freq) : null });
+}
+
+const pctText = v => v === null || v === undefined ? "–" : Math.round(v * 100) + "%";
+
+function updateHud() {
+  const s = scorer ? scorer.summary() : null;
+  hudScore.textContent = s ? s.points.toLocaleString() : "0";
+  hudTempo.textContent = pctText(s?.tempo);
+  hudNotes.textContent = pctText(s?.note);
+  hudTune.textContent  = pctText(s?.intonation);
+}
+
+//The verdict on the note just judged, popped up beside the playhead
+const FEEDBACK_CLASS = { perfect: "fb-perfect", tempo: "fb-tempo", wrong: "fb-wrong", sharp: "fb-sharp", flat: "fb-flat" };
+function showFeedback(r) {
+  if (r.unscored) return;
+  const detail = r.detail;
+  let sub = "";
+  if (!r.missed) {
+    sub = "+" + Math.round(r.points.total);
+    if (detail === "tempo")                    sub += ` · ${Math.round(Math.abs(r.errS) * 1000)} ms ${r.errS > 0 ? "late" : "early"}`;
+    if (detail === "sharp" || detail === "flat") sub += ` · ${Math.round(Math.abs(r.cents))}¢ ${detail}`;
+  }
+  noteFeedback.className = FEEDBACK_CLASS[detail] ?? "fb-silent";
+  noteFeedback.innerHTML = r.label + (sub ? `<small>${sub}</small>` : "");
+  void noteFeedback.offsetWidth;   // restart the animation if one is still running
+  noteFeedback.classList.add("show");
+}
+
+//Called every frame of a Points run, after songPos has advanced. Returns
+//true when the run has just finished.
+function pointsTick(bpm) {
+  if (songPos < 0) {
+    const n = String(Math.ceil(-songPos));
+    if (countInEl.textContent !== n) countInEl.textContent = n;
+    countInEl.hidden = false;
+  } else {
+    countInEl.hidden = true;
+  }
+
+  const judged = scorer.update(songPos, songRate(bpm), micBlockSec);
+  if (judged.length) {
+    showFeedback(judged[judged.length - 1]);
+    updateHud();
+  }
+
+  if (scorer.done && songPos >= SONG_DURATION) {
+    endPointsRun(bpm);
+    return true;
+  }
+  return false;
+}
+
+function endPointsRun(bpm) {
+  playing = false;
+  cancelAnimationFrame(animFrame);
+  playBtn.innerHTML = ICON_PLAY;
+  countInEl.hidden = true;
+  scorer.finish(songRate(bpm));
+  updateHud();
+  showResults(scorer.summary());
+}
+
+//Fill in the results screen. `animate` grows the bars from empty (first
+//showing); off, they just move to the new values (re-scoring after a
+//mic-delay change).
+function showResults(s, animate = true) {
+  document.getElementById("resPiece").textContent = pieceTitle.textContent;
+  document.getElementById("resScore").textContent = s.points.toLocaleString();
+  document.getElementById("resOf").textContent    = s.judged ? `of ${s.maxPoints.toLocaleString()} points` : "";
+  document.getElementById("resGrade").textContent =
+    gradeFor(s.percent) + (s.percent === null ? "" : ` · ${Math.round(s.percent * 100)}%`);
+  document.getElementById("calVal").textContent   = micDelayMs + " ms";
+
+  const bars = [["Tempo", s.tempo], ["Note", s.note], ["Tune", s.intonation]];
+  const setBars = () => bars.forEach(([k, v]) => {
+    document.getElementById("res" + k + "Bar").style.width = Math.round((v || 0) * 100) + "%";
+  });
+  bars.forEach(([k, v]) => {
+    document.getElementById("res" + k).textContent = pctText(v);
+    if (animate) document.getElementById("res" + k + "Bar").style.width = "0%";
+  });
+
+  document.getElementById("resStats").textContent = s.judged
+    ? `${s.hit} of ${s.judged} notes played · best streak ${s.bestStreak}` : "";
+
+  //One line of advice: nothing heard, else which way the timing leaned,
+  //else the weakest area
+  let hint = "";
+  if (!s.judged) {
+    hint = "No notes were scored — check that a microphone is connected.";
+  } else if (!s.hit) {
+    hint = "None of your notes matched — check the microphone, or that you're playing the notes shown.";
+  } else if (s.meanErrS !== null && Math.abs(s.meanErrS) >= 0.08) {
+    hint = `You tended to ${s.meanErrS > 0 ? "play behind the beat" : "rush"} — about ${Math.round(Math.abs(s.meanErrS) * 1000)} ms on average.`;
+  } else {
+    const weakest = bars.reduce((a, b) => b[1] < a[1] ? b : a);
+    if (weakest[1] < 0.75) hint = `Your weakest area was ${{ Tempo: "tempo", Note: "hitting the right notes", Tune: "intonation" }[weakest[0]]}.`;
+  }
+  document.getElementById("resHint").textContent = hint;
+
+  resultsEl.hidden = false;
+  if (animate) {
+    requestAnimationFrame(() => requestAnimationFrame(setBars));   // let the 0% paint first so the bars grow
+  } else {
+    setBars();
+  }
+}
+
+//Nudge the mic-delay allowance and re-judge the finished run with it. More
+//allowance takes the audio to have happened earlier, so the player reads
+//earlier — the fix for "reads late even when I was on the beat".
+const MIC_DELAY_STEP_MS = 20, MIC_DELAY_MIN_MS = -200, MIC_DELAY_MAX_MS = 600;
+function adjustMicDelay(deltaMs) {
+  const next = Math.max(MIC_DELAY_MIN_MS, Math.min(MIC_DELAY_MAX_MS, micDelayMs + deltaMs));
+  const applied = next - micDelayMs;
+  if (!applied || !scorer) return;
+  micDelayMs = next;
+  saveMicDelay();
+  const bpm = parseInt(tempoSlider.value, 10);
+  scorer.shiftAndRejudge(-applied / 1000 * songRate(bpm), songRate(bpm));
+  updateHud();
+  showResults(scorer.summary(), false);
+}
+document.getElementById("calMinus").addEventListener("click", () => adjustMicDelay(-MIC_DELAY_STEP_MS));
+document.getElementById("calPlus").addEventListener("click", () => adjustMicDelay(MIC_DELAY_STEP_MS));
+
+document.getElementById("resAgain").addEventListener("click", () => {
+  preparePointsRun();
+  playing = true;
+  playBtn.innerHTML = ICON_PAUSE;
+  lastTs = null;
+  animFrame = requestAnimationFrame(loop);
+});
+
+document.getElementById("resMenu").addEventListener("click", () => {
+  resultsEl.hidden = true;
+  document.getElementById("backBtn").click();
+});
+
 // ── Animation loop ────────────────────────────────────────────────────────────
 function loop(ts) {
   if (!lastTs) lastTs = ts;
@@ -772,9 +1219,10 @@ function loop(ts) {
   const bpm = parseInt(tempoSlider.value, 10);
   time += dt;
 
-  if (mode === "play-along") {
-    songPos += dt * (bpm / 72);
-    if (songPos >= SONG_DURATION) songPos = 0;
+  if (mode === "play-along" || mode === "points") {
+    songPos += dt * songRate(bpm);
+    //Play Along loops forever; a Points run ends once the last note is judged
+    if (mode === "play-along" && songPos >= SONG_DURATION) songPos = 0;
     holdStart = null;
     advanceTarget = null;
   } else {
@@ -822,16 +1270,27 @@ function loop(ts) {
     }
   }
 
+  //Points: score what's been heard, and stop the loop if that was the end
+  let runEnded = false;
+  if (mode === "points") {
+    recordPos(ts);
+    runEnded = pointsTick(bpm);
+  }
+
   const ev = getCurrentEvent(songPos);
   movementDisplay.textContent = ev.name || "";
 
-  const beat = (Math.floor(time * bpm / 60) % 4) + 1;
+  //Points counts beats off the song itself, so the pulse agrees with the
+  //notes (and the count-in); the other modes keep the metronome's own clock
+  const beat = mode === "points"
+    ? ((Math.floor(songPos) % 4) + 4) % 4 + 1
+    : (Math.floor(time * bpm / 60) % 4) + 1;
   beatDisplay.textContent = "♩ " + beat;
 
-  timelineFill.style.width = ((songPos / SONG_DURATION) * 100).toFixed(1) + "%";
+  timelineFill.style.width = (Math.max(0, songPos / SONG_DURATION) * 100).toFixed(1) + "%";
 
   drawFrame();
-  animFrame = requestAnimationFrame(loop);
+  if (!runEnded) animFrame = requestAnimationFrame(loop);
 }
 
 // ── Controls ─────────────────────────────────────────────────────────────────
@@ -839,6 +1298,8 @@ playBtn.addEventListener("click", () => {
   playing = !playing;
   if (playing) {
     playBtn.innerHTML = '<i class="ti ti-player-pause" aria-hidden="true"></i>';
+    //Frame history from before a pause can't place readings taken after it
+    if (mode === "points") posHistory = [];
     lastTs = null;
     animFrame = requestAnimationFrame(loop);
   } else {
@@ -857,6 +1318,7 @@ intensitySlider.addEventListener("input", () => {
 
 //Click on timeline to scrub
 document.getElementById("timeline").addEventListener("click", (e) => {
+  if (mode === "points") return;   // seeking would make a scored run meaningless
   const rect  = e.currentTarget.getBoundingClientRect();
   const ratio = (e.clientX - rect.left) / rect.width;
   const raw   = ratio * SONG_DURATION;
@@ -904,10 +1366,13 @@ function noteToMidi(note) {
 //Live note polling
 setInterval(async () => {
   try {
+    const sentAt = performance.now();
     const res  = await fetch("/api/live-note");
     const data = await res.json();
+    const respondedAt = (sentAt + performance.now()) / 2;   // the server answered somewhere mid-flight
     liveNote = data.note;   // keep globals in sync
     liveFreq = data.freq || 0;
+    if (mode === "points" && playing) takeMicReading(data, respondedAt);
 
     if (!data.note) {
       liveNoteDisplay.textContent = "—";
@@ -970,7 +1435,7 @@ document.getElementById("startBtn").addEventListener("click", async () => {
   const pieceId   = pieceCard?.dataset.pieceId ?? pieceSelect.value;
 
   mode = modeCard?.dataset.mode ?? "play-along";
-  modeBadge.textContent = mode === "wait-for-me" ? "Wait for Me" : "Play Along";
+  applyModeUi();
 
   if (pieceId) pieceSelect.value = pieceId;
   await loadScore(pieceId);

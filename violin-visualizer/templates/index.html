@@ -37,10 +37,47 @@
             <span class="mode-name">Wait for Me</span>
             <span class="mode-desc">Score advances when you play the right note</span>
           </button>
+          <button class="mode-card" data-mode="points">
+            <span class="mode-name">Points</span>
+            <span class="mode-desc">Play along and get scored on tempo and pitch</span>
+          </button>
         </div>
       </div>
 
       <button id="startBtn">Start</button>
+    </div>
+  </div>
+
+  <!-- Points mode results, shown when a run finishes -->
+  <div id="results" hidden>
+    <div class="res-inner">
+      <p class="ss-label" id="resPiece">Results</p>
+      <p class="res-score" id="resScore">0</p>
+      <p class="res-of" id="resOf">points</p>
+      <p class="res-grade" id="resGrade"></p>
+
+      <div class="res-bars">
+        <div class="res-bar"><span class="res-bar-label">Tempo</span><span class="res-bar-track"><i id="resTempoBar"></i></span><b id="resTempo">–</b></div>
+        <div class="res-bar"><span class="res-bar-label">Notes</span><span class="res-bar-track"><i id="resNoteBar"></i></span><b id="resNote">–</b></div>
+        <div class="res-bar"><span class="res-bar-label">Intonation</span><span class="res-bar-track"><i id="resTuneBar"></i></span><b id="resTune">–</b></div>
+      </div>
+
+      <p class="res-stats" id="resStats"></p>
+      <p class="res-hint" id="resHint"></p>
+
+      <!-- The mic hands over audio late by an amount nothing can measure, so it's an adjustable allowance -->
+      <div class="res-cal">
+        <span class="res-cal-label">Mic delay</span>
+        <button id="calMinus" aria-label="Less mic delay">−</button>
+        <b id="calVal">100 ms</b>
+        <button id="calPlus" aria-label="More mic delay">+</button>
+      </div>
+      <p class="res-cal-hint">Timing reads late even when you were on the beat? Raise it. Reads early? Lower it. This result updates as you adjust.</p>
+
+      <div class="res-actions">
+        <button id="resAgain">Play again</button>
+        <button id="resMenu" class="secondary">Menu</button>
+      </div>
     </div>
   </div>
 
@@ -82,9 +119,11 @@
 
     <!-- Sheet music (real PDF), scrolls in sync with playback -->
     <div id="sheet-area" hidden>
-      <div class="sheet-area-label">Sheet Music</div>
+       <!--<div class="sheet-area-label">Sheet Music</div>-->
       <div id="sheetScroll">
         <div id="sheetPages"></div>
+        <!-- Band over the row currently being played; positioned by visualizer.js -->
+        <div id="sheetRowHighlight"></div>
       </div>
     </div>
 
@@ -94,6 +133,21 @@
       <div class="note-name" id="movementDisplay"></div>
       <div class="bpm-pulse" id="beatDisplay">♩ —</div>
       <div id="liveNoteDisplay" aria-label="Live detected note">—</div>
+
+      <!-- Points mode only -->
+      <div id="scoreHud" hidden>
+        <div class="hud-label">Score</div>
+        <div class="hud-score" id="hudScore">0</div>
+        <div class="hud-sub">
+          <span>Tempo <b id="hudTempo">–</b></span>
+          <span>Notes <b id="hudNotes">–</b></span>
+          <span>Tune <b id="hudTune">–</b></span>
+        </div>
+        <div class="hud-warn" id="hudWarn" hidden>No microphone detected</div>
+      </div>
+      <div id="noteFeedback" aria-live="polite"></div>
+      <div id="countIn" hidden></div>
+
       <div id="timeline"><div id="timeline-fill"></div></div>
     </div>
 
