@@ -26,7 +26,7 @@ z4 | z4 | z4 | z4 | ( f b ) ( f e ) | ( d c ) (B F) | (G F/2 G/2) (B A/2 G/2) |
 %%sync page=1 row=5
 ( f b ) ( f ^g ) | (a3/2 ^g/2) ( f e d c) | (B c/2 d/2) (c B) | (B/2 A/2 d/2 c/2) c2 |
 %%sync page=1 row=6
-(B a) (^g f) | (b/2 a/2 e/2 f/2) | (^g/2 a e c) | (B/2 c d B/2)| (^G/2 E/2 D/2 B,/2) | A,2 (a, b,) |
+(B a) (^g f) | (b/2 a/2 e/2 f/2) | (^g/2 a e c) | (B/2 c d B/2)| (^G/2 E/2 D/2 B,/2) | A,2 (A, B,) |
 %%sync page=1 row=7
 (D C) (C D) | (F E) (E F) | (A3/2 G/2) (B/2 A/2 G/2 F/2) | (E/2 F/2 G/2 A/2) (B/2 c/2 d/2 e/2) |
 %%sync page=1 row=8
@@ -43,5 +43,17 @@ F) A,/2 B,/2 (C/2 D/2) E/2 F/2 | (G/2 F/2) E/2 F/2 (G/2 A/2 B/2 c/2) | (d3/2 c/2
 %%sync page=2 row=3
 (c a) (g e) | (d3/2 c/2) (e/2 d/2 A/2 B/2) | (c a) (g e) | d2 z2 | z4 |
 %%sync page=2 row=4
-z4 |
+(d g) (d c) | (B F) (D B,) | (D B,) G,2 | (G B) (d2) | (g b) (g f) |
+%%sync page=2 row=5
+(e B) (G E) | (D F) (B d) | c2 f2 | ( f b ) ( f e ) | ( d c ) (B F) | 
+%%sync page=2 row=6
+(G F/2 G/2) (B A/2 G/2) | ( F3/2  D/2) B,2 | (^A,3/2 B,/2) (C/2 ^A,/2 B,/2 C/2) | (D F) (B d) |
+%%sync page=2 row=7
+(=c/2 B/2 =c/2 d/2) (e/2 d/2 e/2 f/2) | (g/2 f/2 g/2 a/2) b2 | (g b) (a f) |
+%%sync page=2 row=8
+(g f) (e B) | ( c/2 d/2 e/2 d/2) | (c/2 E/2) F/2 G/2 | F d/2 c/2 (B/2 A/2) G/2 F/2 |
+%%sync page=2 row=9
+E c/2 B/2 (A/2 G/2) F/2 E/2 | D B/2 A/2 (G/2 F/2) E/2 D/2 | F2 ^A,2 | B,2 (G D) |
+%%sync page=2 row=10
+F2 (G D) | (F B) (d f) | b2 (f d) | B2 (F D) | B,2 B,2 | B,4 | z4
 |]
