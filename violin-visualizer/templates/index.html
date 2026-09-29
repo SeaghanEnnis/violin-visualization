@@ -113,6 +113,16 @@
       <input type="range" id="intensitySlider" min="1" max="10" value="1" step="1" />
       <span class="ctrl-val" id="intensityVal">1</span>
     </div>
+
+    <!-- Input device: cross-platform (Windows/Mac/Linux) list from sounddevice/PortAudio -->
+    <div class="ctrl-group">
+      <span class="ctrl-label">Input</span>
+      <select id="micSelect"><option value="">Auto-detect</option></select>
+      <button id="micRefresh" class="icon-btn-sm" aria-label="Rescan input devices" title="Rescan input devices">
+        <i class="ti ti-refresh" aria-hidden="true"></i>
+      </button>
+      <span id="micStatus" class="mic-status" title=""></span>
+    </div>
   </div>
 
   <div id="main-area">

@@ -24,6 +24,7 @@ let songPos       = 0;
 let lastTs        = null;
 let mode          = "play-along";
 let liveNote      = null;           // current detected note from mic
+let lastMicActive = true;           // last /api/live-note "mic" flag seen — refresh the picker when this flips
 let liveFreq      = 0;              // raw detected frequency in Hz
 let holdStart     = null;           // timestamp when correct note hold began
 let advanceTarget = null;           // songPos being glided toward (Wait for Me only)
@@ -57,6 +58,9 @@ const pieceTitle       = document.getElementById("pieceTitle");
 const pieceSub         = document.getElementById("pieceSub");
 const pieceSelect      = document.getElementById("pieceSelect");
 const liveNoteDisplay  = document.getElementById("liveNoteDisplay");
+const micSelect        = document.getElementById("micSelect");
+const micRefreshBtn    = document.getElementById("micRefresh");
+const micStatus        = document.getElementById("micStatus");
 const sheetArea        = document.getElementById("sheet-area");
 const sheetScroll      = document.getElementById("sheetScroll");
 const sheetPages       = document.getElementById("sheetPages");
@@ -66,6 +70,74 @@ const scoreHud         = document.getElementById("scoreHud");
 const noteFeedback     = document.getElementById("noteFeedback");
 const countInEl        = document.getElementById("countIn");
 const resultsEl        = document.getElementById("results");
+
+// ── Input device picker ──────────────────────────────────────────────────────
+// The backend (app.py) ranks devices by the current OS's native audio API —
+// WASAPI on Windows, Core Audio on Mac, ALSA/PulseAudio on Linux — and this
+// dropdown lets the auto-picked one be overridden. "Auto-detect" (empty
+// value) asks the server to re-run that same platform-aware pick.
+async function loadAudioDevices(preserveSelection = true) {
+  const wanted = preserveSelection ? micSelect.value : "";
+  try {
+    const res  = await fetch("/api/audio-devices");
+    const data = await res.json();
+
+    micSelect.innerHTML = "";
+    const autoOpt = document.createElement("option");
+    autoOpt.value = "";
+    autoOpt.textContent = "Auto-detect";
+    micSelect.appendChild(autoOpt);
+    data.devices.forEach(d => {
+      const opt = document.createElement("option");
+      opt.value       = d.index;
+      opt.textContent = `${d.name} — ${d.hostapi}`;
+      micSelect.appendChild(opt);
+    });
+
+    //Keep whatever the user had selected if it's still in the list; otherwise
+    //reflect what the server is actually running (may differ from "wanted"
+    //right after a failed switch, which falls back to auto).
+    const stillThere = wanted && [...micSelect.options].some(o => o.value === wanted);
+    micSelect.value = stillThere ? wanted : (data.auto ? "" : String(data.current ?? ""));
+
+    micStatus.className = data.active ? "mic-status ok" : "mic-status fail";
+    micStatus.title = data.active
+      ? `Listening on ${data.name ?? "device " + data.current}`
+      : "No working microphone — Wait for Me and Points modes won't hear you";
+  } catch (err) {
+    micStatus.className = "mic-status fail";
+    micStatus.title = "Could not reach the server to list input devices";
+    console.error("Failed to load audio devices:", err);
+  }
+}
+
+micSelect.addEventListener("change", async () => {
+  const raw    = micSelect.value;
+  const device = raw === "" ? null : parseInt(raw, 10);
+  micSelect.disabled = true;
+  //A device that fails can take a few seconds (a couple of retries on the
+  //server, since some devices only fail a beat after they're asked to start)
+  //— without this the picker just looks frozen for that stretch.
+  micStatus.className = "mic-status";
+  micStatus.title = "Switching…";
+  try {
+    const res  = await fetch("/api/audio-devices", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ device }),
+    });
+    const data = await res.json();
+    if (!data.ok) console.warn("Could not switch input device:", data.error);
+    await loadAudioDevices();
+  } finally {
+    micSelect.disabled = false;
+  }
+});
+
+micRefreshBtn.addEventListener("click", () => {
+  micRefreshBtn.classList.add("spinning");
+  loadAudioDevices().finally(() => micRefreshBtn.classList.remove("spinning"));
+});
 
 // ── Sheet-music PDF sync ─────────────────────────────────────────────────────
 // Scroll position follows songPos through PIXEL_ANCHORS — {t, y} points built
@@ -1374,6 +1446,13 @@ setInterval(async () => {
     liveFreq = data.freq || 0;
     if (mode === "points" && playing) takeMicReading(data, respondedAt);
 
+    //Catch a device dropping out mid-session (unplugged, Bluetooth drops) —
+    //cheap to check every poll, only touches the DOM when it actually flips.
+    if (data.mic !== lastMicActive) {
+      lastMicActive = data.mic;
+      if (!data.mic) loadAudioDevices();   // also refreshes which device the dropdown shows as failed
+    }
+
     if (!data.note) {
       liveNoteDisplay.textContent = "—";
       liveNoteDisplay.style.opacity = "0.25";
@@ -1456,3 +1535,4 @@ document.getElementById("startBtn").addEventListener("click", async () => {
 });
 
 loadPieceList();
+loadAudioDevices();

@@ -239,6 +239,38 @@ body {
   min-width: 54px;
 }
 
+/* Small icon button — rescan the input-device list */
+.icon-btn-sm {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  font-size: 12px;
+  flex-shrink: 0;
+  transition: border-color 0.15s, color 0.15s, background 0.15s, transform 0.15s;
+}
+.icon-btn-sm:hover { border-color: rgba(255,255,255,0.25); color: rgba(255,255,255,0.75); background: rgba(255,255,255,0.05); }
+.icon-btn-sm:active { transform: scale(0.92); }
+.icon-btn-sm.spinning i { animation: spin 0.6s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Dot showing whether the chosen input device is actually live */
+.mic-status {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.15);
+}
+.mic-status.ok   { background: #4ade80; box-shadow: 0 0 6px rgba(74, 222, 128, 0.6); }
+.mic-status.fail { background: #f87171; box-shadow: 0 0 6px rgba(248, 113, 113, 0.6); }
+
 /* Piece selector */
 select {
   -webkit-appearance: none;

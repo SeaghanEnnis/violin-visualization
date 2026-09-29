@@ -8,6 +8,7 @@ import os
 import sys
 import logging
 import atexit
+import platform
 import threading
 import time
 from collections import deque
@@ -46,29 +47,90 @@ _note_lock     = threading.Lock()
 _target_sr     = 44100
 _stream        = None
 _note_history  = deque(maxlen=3)          # temporal smoothing: vote over last 3 frames
+#Which device is live right now, and whether that was auto-picked or asked for
+#via /api/audio-devices — read by the frontend's input-device dropdown.
+_active_device = {"index": None, "name": None, "hostapi": None, "auto": True}
 
 #Max/min for yin read
 _FMIN = librosa.note_to_hz("G3")
 _FMAX = librosa.note_to_hz("C8")
 
-def _get_first_wasapi_input():
-    devices = sd.query_devices()
-    for index, dev in enumerate(devices):
-        if "WASAPI" not in sd.query_hostapis(dev["hostapi"])["name"].upper():
+#PortAudio host APIs to try before any other, per OS — WASAPI is Windows-only,
+#so picking it unconditionally (as this used to) left every other platform,
+#Mac included, with no working input at all. Devices outside this list are
+#still tried, just after these, so an unusual setup still has a fallback.
+_HOST_API_PRIORITY = {
+    "Windows": ("WASAPI", "DIRECTSOUND", "MME", "WDM-KS"),
+    "Darwin":  ("CORE AUDIO",),
+    "Linux":   ("ALSA", "PULSE", "JACK", "OSS"),
+}
+
+def _input_devices():
+    """Every input-capable device, each with its host API name."""
+    hostapis = sd.query_hostapis()
+    return [
+        {
+            "index":      i,
+            "name":       dev["name"],
+            "hostapi":    hostapis[dev["hostapi"]]["name"],
+            "channels":   dev["max_input_channels"],
+            "samplerate": int(dev["default_samplerate"]),
+        }
+        for i, dev in enumerate(sd.query_devices())
+        if dev["max_input_channels"] > 0
+    ]
+
+def _ranked_input_devices():
+    """Input devices, this platform's preferred host API(s) first."""
+    preferred = _HOST_API_PRIORITY.get(platform.system(), ())
+    def rank(dev):
+        name = dev["hostapi"].upper()
+        for i, want in enumerate(preferred):
+            if want in name:
+                return i
+        return len(preferred)   # not a preferred API — still a candidate, just last
+    return sorted(_input_devices(), key=rank)
+
+def _probe_device(dev):
+    """Does this device actually open? Try mono first, then its full channel count."""
+    for chans in ([1] if dev["channels"] == 1 else [1, dev["channels"]]):
+        try:
+            with sd.InputStream(device=dev["index"], channels=chans,
+                                samplerate=dev["samplerate"], blocksize=_WINDOW_SIZE):
+                pass
+            return chans
+        except Exception:
             continue
-        if dev["max_input_channels"] <= 0:
-            continue
-        rate  = int(dev["default_samplerate"])
-        chans = dev["max_input_channels"]
-        for c in ([1] if chans == 1 else [1, chans]):
+    return None
+
+def _find_working_input(preferred_index=None):
+    """A device that actually opens: `preferred_index` first if given (an
+    explicit choice from the dropdown), then every other input device,
+    platform-preferred host APIs first. Returns a device dict (plus its
+    working channel count) or None if nothing on the machine will open."""
+    candidates = _ranked_input_devices()
+    if preferred_index is not None:
+        chosen = next((d for d in candidates if d["index"] == preferred_index), None)
+        if chosen is None:
             try:
-                with sd.InputStream(device=index, channels=c, samplerate=rate,
-                                    blocksize=_WINDOW_SIZE):
-                    pass
-                return index, rate, c
+                raw = sd.query_devices(preferred_index)
+                if raw["max_input_channels"] > 0:
+                    chosen = {
+                        "index": preferred_index, "name": raw["name"],
+                        "hostapi": sd.query_hostapis(raw["hostapi"])["name"],
+                        "channels": raw["max_input_channels"],
+                        "samplerate": int(raw["default_samplerate"]),
+                    }
             except Exception:
-                continue
-    return None, None, None
+                chosen = None
+        if chosen is not None:
+            candidates = [chosen] + [d for d in candidates if d["index"] != preferred_index]
+
+    for dev in candidates:
+        chans = _probe_device(dev)
+        if chans is not None:
+            return {**dev, "channels": chans}
+    return None
 
 def _freq_to_note(freq):
     if freq <= 0:
@@ -109,20 +171,62 @@ def _audio_callback(indata, _frames, _time, _status):
     smoothed = max(set(_note_history), key=list(_note_history).count)
     _publish_block(smoothed, freq, arrived)
 
-def _start_audio():
+#Closing a stream doesn't always release the device instantly at the OS level
+#— Bluetooth input in particular can take a beat to renegotiate — so the very
+#next attempt to open it can fail even though the device is perfectly fine a
+#moment later. Retried with backoff rather than surfaced as a hard failure.
+_START_RETRY_DELAYS_S = (0, 0.2, 0.5)
+
+def _open_and_start(dev):
+    """Construct and start a stream on `dev`, retrying briefly. Returns
+    (stream, None) or (None, last_exception)."""
+    last_exc = None
+    for delay in _START_RETRY_DELAYS_S:
+        if delay:
+            time.sleep(delay)
+        stream = sd.InputStream(device=dev["index"], channels=dev["channels"], samplerate=dev["samplerate"],
+                                blocksize=_WINDOW_SIZE, callback=_audio_callback)
+        try:
+            stream.start()
+            return stream, None
+        except Exception as exc:
+            stream.close()
+            last_exc = exc
+    return None, last_exc
+
+def _start_audio(device_index=None):
     """Open the InputStream in the main thread (same as audio_listener/audio_reader.py).
     PortAudio drives the callback on its own internal audio thread; no Python
-    background thread is needed and no WASAPI/COM issues arise."""
-    global _target_sr, _stream
-    dev, rate, chans = _get_first_wasapi_input()
+    background thread is needed and no WASAPI/COM issues arise.
+
+    `device_index` pins a specific device (from the input-device dropdown);
+    left as None, the best-guess device for this OS is used instead. Returns
+    (ok, error_message).
+    """
+    global _target_sr, _stream, _active_device
+    dev = _find_working_input(device_index)
     if dev is None:
-        print("Live audio: no WASAPI input found — /api/live-note will return null")
-        return
-    _target_sr = rate
-    _stream = sd.InputStream(device=dev, channels=chans, samplerate=rate,
-                             blocksize=_WINDOW_SIZE, callback=_audio_callback)
-    _stream.start()
-    print(f"Live audio detection started (device {dev}, {rate} Hz, {chans} ch)")
+        _active_device = {"index": None, "name": None, "hostapi": None, "auto": device_index is None}
+        msg = "no working input device found" if device_index is None else "that device couldn't be opened"
+        print(f"Live audio: {msg} — /api/live-note will return null")
+        return False, msg
+
+    stream, exc = _open_and_start(dev)
+    if stream is None:
+        #Passing the quick open/close probe doesn't guarantee a real start
+        #(some virtual/exclusive-mode devices only fail here) — reported back
+        #rather than left to crash the request or, at startup, the app itself.
+        _active_device = {"index": None, "name": None, "hostapi": None, "auto": device_index is None}
+        msg = f"{dev['name']} opened but failed to start ({exc})"
+        print(f"Live audio: {msg}")
+        return False, msg
+
+    _target_sr = dev["samplerate"]
+    _stream = stream
+    _active_device = {"index": dev["index"], "name": dev["name"], "hostapi": dev["hostapi"], "auto": device_index is None}
+    print(f"Live audio detection started (device {dev['index']} '{dev['name']}' via {dev['hostapi']}, "
+          f"{dev['samplerate']} Hz, {dev['channels']} ch)")
+    return True, None
 
 def _stop_audio():
     global _stream
@@ -251,6 +355,52 @@ def _read_abc_meta(path: Path) -> tuple[str, str, float]:
             elif line.startswith("K:"):
                 break
     return title, composer, tempo
+
+
+@app.route("/api/audio-devices", methods=["GET"])
+def list_audio_devices():
+    """Every input device this machine has, plus which one is live now."""
+    try:
+        devices = _ranked_input_devices()
+    except Exception as exc:
+        return jsonify({"devices": [], "current": None, "auto": True, "active": False, "error": str(exc)}), 500
+    return jsonify({
+        "devices": devices,
+        "current": _active_device["index"],
+        "name":    _active_device["name"],
+        "auto":    _active_device["auto"],
+        "active":  _stream is not None,
+    })
+
+
+@app.route("/api/audio-devices", methods=["POST"])
+def select_audio_device():
+    """Switch the live input device. Body: {"device": <index>} or {"device": null} for auto-detect."""
+    body = request.get_json(silent=True) or {}
+    raw = body.get("device")
+    try:
+        device_index = int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": f"Invalid device '{raw}'"}), 400
+
+    _stop_audio()
+    _note_history.clear()
+    with _note_lock:
+        _live_note.update(note=None, freq=0.0)
+    ok, err = _start_audio(device_index)
+
+    #200 either way: the request itself was handled correctly, whether or not
+    #the device came up — "ok" in the body is what the caller should check
+    #(some devices pass the earlier probe but fail here anyway, e.g.
+    #exclusive-mode or Bluetooth devices that reject a rapid reopen).
+    return jsonify({
+        "ok":      ok,
+        "error":   err,
+        "current": _active_device["index"],
+        "name":    _active_device["name"],
+        "hostapi": _active_device["hostapi"],
+        "auto":    _active_device["auto"],
+    })
 
 
 @app.route("/api/live-note")

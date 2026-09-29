@@ -1,42 +1,66 @@
+import platform
 import numpy as np
 import sounddevice as sd
 import librosa
 
-#Partial duplication in the mian app.py
-def get_first_working_wasapi_input():
-    devices = sd.query_devices()
-    
-    print("Scanning system for a functional WASAPI microphone")
-    for index, dev in enumerate(devices):
-        api_name = sd.query_hostapis(dev['hostapi'])['name']
-        
-        if "WASAPI" in api_name.upper() and dev['max_input_channels'] > 0:
-            name = dev['name']
-            rate = int(dev['default_samplerate'])
-            max_chans = dev['max_input_channels']
-            
-            print(f"WASAPI Device [{index}]: {name}")
-            print(f"Device Freq Rate: {rate}Hz | Max Input Channels: {max_chans}")
-            
-            channels_to_test = [1] if max_chans == 1 else [1, max_chans]
-            
-            for chans in channels_to_test:
-                try:
-                    with sd.InputStream(device=index, channels=chans, samplerate=rate, blocksize=1024):
-                        pass
-                    print(f"Stream verified on Device #{index} with {chans} channel(s).")
-                    return index, rate, name, chans
-                except Exception as e:
-                    print(f"Attempt with {chans} channel(s) failed: {e}")
-                    continue
-                
+#Partial duplication in the main app.py
+
+#PortAudio host APIs to try before any other, per OS — WASAPI is Windows-only;
+#trying it unconditionally left this script with no working input at all on
+#Mac or Linux. Devices outside this list are still tried, just after these.
+HOST_API_PRIORITY = {
+    "Windows": ("WASAPI", "DIRECTSOUND", "MME", "WDM-KS"),
+    "Darwin":  ("CORE AUDIO",),
+    "Linux":   ("ALSA", "PULSE", "JACK", "OSS"),
+}
+
+def get_first_working_input():
+    devices  = sd.query_devices()
+    preferred = HOST_API_PRIORITY.get(platform.system(), ())
+
+    def rank(pair):
+        _, dev = pair
+        name = sd.query_hostapis(dev["hostapi"])["name"].upper()
+        for i, want in enumerate(preferred):
+            if want in name:
+                return i
+        return len(preferred)   # not a preferred API — still a candidate, just last
+
+    candidates = sorted(
+        ((i, d) for i, d in enumerate(devices) if d["max_input_channels"] > 0),
+        key=rank,
+    )
+
+    print(f"Scanning system for a functional microphone ({platform.system()} — "
+          f"preferring {', '.join(preferred) or 'any host API'})")
+    for index, dev in candidates:
+        api_name  = sd.query_hostapis(dev['hostapi'])['name']
+        name      = dev['name']
+        rate      = int(dev['default_samplerate'])
+        max_chans = dev['max_input_channels']
+
+        print(f"{api_name} Device [{index}]: {name}")
+        print(f"Device Freq Rate: {rate}Hz | Max Input Channels: {max_chans}")
+
+        channels_to_test = [1] if max_chans == 1 else [1, max_chans]
+
+        for chans in channels_to_test:
+            try:
+                with sd.InputStream(device=index, channels=chans, samplerate=rate, blocksize=1024):
+                    pass
+                print(f"Stream verified on Device #{index} with {chans} channel(s).")
+                return index, rate, name, chans
+            except Exception as e:
+                print(f"Attempt with {chans} channel(s) failed: {e}")
+                continue
+
     return None, None, None, None
 
 #Get input sound device
-TARGET_DEVICE, SAMPLE_RATE, DEVICE_NAME, CHANNELS = get_first_working_wasapi_input()
+TARGET_DEVICE, SAMPLE_RATE, DEVICE_NAME, CHANNELS = get_first_working_input()
 
 if TARGET_DEVICE is None:
-    print("Fatal Error: No functional WASAPI audio input device could be initialized.")
+    print("Fatal Error: No functional audio input device could be initialized.")
     exit()
 
 
