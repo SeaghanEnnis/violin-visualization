@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 ABC_DIR    = Path(__file__).parent.parent / "abc"
 SHEETS_DIR = Path(__file__).parent.parent / "sheets"
+ACCOMP_DIR = Path(__file__).parent.parent / "accompaniment"
 
 app = Flask(__name__)
 
@@ -298,6 +299,7 @@ def _abc_to_score_json(sheet) -> tuple[list[dict], list[dict]]:
                             "name":    getattr(ev, "_section", ""),
                             "slur":    None,
                             "rest":    True,
+                            "line":    getattr(ev, "_line", 0),
                         })
                         t += dur
                         continue
@@ -311,6 +313,7 @@ def _abc_to_score_json(sheet) -> tuple[list[dict], list[dict]]:
                         "bow":     "down",
                         "name":    getattr(ev, "_section", ""),
                         "slur":    getattr(ev, "_slur_id", None),
+                        "line":    getattr(ev, "_line", 0),
                     })
 
                 elif isinstance(ev, Chord):
@@ -330,11 +333,62 @@ def _abc_to_score_json(sheet) -> tuple[list[dict], list[dict]]:
                             "bow":     "down",
                             "name":    getattr(ev, "_section", ""),
                             "slur":    False,
+                            "line":    getattr(ev, "_line", 0),
                         })
 
                 t += dur
 
     return events, sync_anchors
+
+
+def _score_lines(events: list[dict]) -> list[dict]:
+    """Group events by the ABC source line they came from, for Line by Line
+    practice. Returns [{start, end}] in beats, in playing order."""
+    lines: list[dict] = []
+    for ev in events:
+        end = round(ev["t"] + ev["dur"], 4)
+        if lines and lines[-1]["src"] == ev["line"]:
+            lines[-1]["end"] = end
+        else:
+            lines.append({"src": ev["line"], "start": ev["t"], "end": end})
+    return [{"start": l["start"], "end": l["end"]} for l in lines]
+
+
+#%%accompaniment file=<name>.mp3 bpm=100 offset=0.92 — a backing track in
+#accompaniment/ to play alongside the score. `bpm` is the tempo it was
+#recorded at; `offset` is where score beat 0 falls in the audio, in seconds.
+#Without the directive, accompaniment/<stem>-<N>bpm.(mp3|ogg|wav|m4a) is
+#picked up with offset 0.
+_ACCOMP_RE      = re.compile(r"^%%accompaniment\s+(.*)$", re.IGNORECASE | re.MULTILINE)
+_ACCOMP_EXTS    = (".mp3", ".ogg", ".wav", ".m4a")
+
+def _find_accompaniment(abc_text: str, stem: str, score_tempo: float) -> dict | None:
+    m = _ACCOMP_RE.search(abc_text)
+    if m:
+        opts = dict(re.findall(r"(\w+)=(\S+)", m.group(1)))
+        path = ACCOMP_DIR / opts.get("file", "")
+        if not opts.get("file") or not path.is_file():
+            print(f"%%accompaniment in {stem}.abc: file '{opts.get('file')}' not found in {ACCOMP_DIR}")
+            return None
+        bpm_m = re.search(r"-(\d+)bpm", path.stem)
+        return {
+            "url":    f"/accompaniment/{path.name}",
+            "bpm":    float(opts.get("bpm") or (bpm_m.group(1) if bpm_m else score_tempo)),
+            "offset": float(opts.get("offset", 0)),
+        }
+
+    if ACCOMP_DIR.exists():
+        for path in sorted(ACCOMP_DIR.glob(f"{stem}*")):
+            if path.suffix.lower() not in _ACCOMP_EXTS:
+                continue
+            bpm_m = re.fullmatch(re.escape(stem) + r"(?:-(\d+)bpm)?", path.stem)
+            if bpm_m:
+                return {
+                    "url":    f"/accompaniment/{path.name}",
+                    "bpm":    float(bpm_m.group(1) or score_tempo),
+                    "offset": 0.0,
+                }
+    return None
 
 
 def _read_abc_meta(path: Path) -> tuple[str, str, float]:
@@ -433,6 +487,12 @@ def sheet_pdf(filename):
     return send_from_directory(SHEETS_DIR, filename)
 
 
+@app.route("/accompaniment/<path:filename>")
+def accompaniment_audio(filename):
+    """Serve backing tracks from accompaniment/ (range requests, so seeking works)."""
+    return send_from_directory(ACCOMP_DIR, filename)
+
+
 @app.route("/api/pieces")
 def get_pieces():
     """List all ABC pieces from the abc/ folder."""
@@ -466,7 +526,8 @@ def get_score():
         return jsonify({"error": f"ABC file '{filename}' not found"}), 404
     try:
         from sheet_music_reader.sheet_music_reader import parse_abc
-        sheet    = parse_abc(abc_path.read_text(encoding="utf-8"))
+        abc_text = abc_path.read_text(encoding="utf-8")
+        sheet    = parse_abc(abc_text)
         events, sync_anchors = _abc_to_score_json(sheet)
         duration = max((e["t"] + e["dur"] for e in events), default=0)
 
@@ -482,8 +543,10 @@ def get_score():
                 "tempo":      sheet.tempo,
                 "pdf":        pdf_url,
             },
+            "accompaniment": _find_accompaniment(abc_text, stem, sheet.tempo),
             "strings":       STRINGS,
             "score":         events,
+            "lines":         _score_lines(events),
             "syncAnchors":   sync_anchors,
             "syncPageRows":  sheet.sync_page_rows,
         })

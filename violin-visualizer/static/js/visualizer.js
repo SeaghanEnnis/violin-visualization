@@ -29,6 +29,9 @@ let liveFreq      = 0;              // raw detected frequency in Hz
 let holdStart     = null;           // timestamp when correct note hold began
 let advanceTarget = null;           // songPos being glided toward (Wait for Me only)
 let SLUR_GROUPS   = [];             // [{str, tStart, tEnd}] precomputed from score
+let LINES         = [];             // [{start, end}] one per ABC source line, from the API (Line by Line)
+let lineIdx       = 0;              // the line being practised (Line by Line only)
+let lineAdvance   = false;          // Line by Line: move on to the next line when one ends, instead of repeating it
 const HOLD_FRACTION = 0.5;          // required hold = this fraction of the note's real-time length
 const MIN_HOLD_MS   = 150;          // floor, so fast/short notes stay achievable
 const MAX_HOLD_MS   = 1200;         // ceiling, so slow/long notes don't stall practice
@@ -70,6 +73,9 @@ const scoreHud         = document.getElementById("scoreHud");
 const noteFeedback     = document.getElementById("noteFeedback");
 const countInEl        = document.getElementById("countIn");
 const resultsEl        = document.getElementById("results");
+const lineNav          = document.getElementById("lineNav");
+const lineLabel        = document.getElementById("lineLabel");
+const lineAutoBtn      = document.getElementById("lineAuto");
 
 // ── Input device picker ──────────────────────────────────────────────────────
 // The backend (app.py) ranks devices by the current OS's native audio API —
@@ -331,14 +337,23 @@ function buildPixelAnchors() {
 //below the top) lies beyond what can scroll, so the view just rests at the
 //bottom of the document.
 function sheetTargetScrollTop() {
+  const pos = sheetPos();
   let y;
   if (PIXEL_ANCHORS.length) {
-    y = interpolateSheetAnchors(songPos);
+    y = interpolateSheetAnchors(pos);
   } else {
-    const ratio = SONG_DURATION > 0 ? Math.max(0, Math.min(1, songPos / SONG_DURATION)) : 0;
+    const ratio = SONG_DURATION > 0 ? Math.max(0, Math.min(1, pos / SONG_DURATION)) : 0;
     y = ratio * sheetMaxScroll;
   }
   return Math.max(0, Math.min(y, sheetMaxScroll));
+}
+
+//Where the sheet should follow: songPos, except during a Line by Line
+//count-in, where the sheet already shows the line about to be played
+//(songPos is still back inside the previous line then).
+function sheetPos() {
+  const line = currentLine();
+  return line ? Math.max(songPos, line.start) : songPos;
 }
 
 //Hold at the current row's y, easing over from the previous row's y during
@@ -377,8 +392,9 @@ sheetScroll.addEventListener("pointerdown", beginUserScroll);
 function updateRowHighlight() {
   let idx = -1;
   if (pdfDoc) {
+    const pos = sheetPos();
     for (let i = ROW_BANDS.length - 1; i >= 0; i--) {
-      if (songPos >= ROW_BANDS[i].t) { idx = i; break; }
+      if (pos >= ROW_BANDS[i].t) { idx = i; break; }
     }
   }
   if (idx === highlightedBand) return;
@@ -564,15 +580,20 @@ async function loadScore(pieceId) {
     SCORE         = data.score;
     computeSlurGroups();
     SONG_DURATION = data.piece.duration;
+    LINES         = data.lines?.length ? data.lines : [{ start: 0, end: SONG_DURATION }];
     songPos       = 0;
     time          = 0;
     holdStart     = null;
     advanceTarget = null;
     if (mode === "points") preparePointsRun();   // new piece = new run
+    if (mode === "line-by-line") startLine(0);
     pieceTitle.textContent = data.piece.title;
     pieceSub.textContent   = `${data.piece.composer} · ${data.piece.instrument}`;
-    if (data.piece.tempo) {
-      tempoSlider.value    = Math.max(40, Math.min(200, Math.round(data.piece.tempo)));
+    loadAccompaniment(data.accompaniment, pieceId);
+    //With a backing track, start at the tempo it was recorded at, so it plays unstretched
+    const startTempo = data.accompaniment?.bpm ?? data.piece.tempo;
+    if (startTempo) {
+      tempoSlider.value    = Math.max(40, Math.min(200, Math.round(startTempo)));
       tempoVal.textContent = tempoSlider.value + " BPM";
     }
     drawFrame();
@@ -633,9 +654,24 @@ function computeSlurGroups() {
   if (group) SLUR_GROUPS.push(group);
 }
 
+//The line being practised in Line by Line mode, or null in any other mode
+function currentLine() {
+  return mode === "line-by-line" ? LINES[lineIdx] ?? null : null;
+}
+
+//Whether an event is part of what's being played — everything, except in
+//Line by Line, where only the current line's events are shown and judged
+function inPlayRange(ev) {
+  const line = currentLine();
+  return !line || (ev.t >= line.start && ev.t < line.end);
+}
+
 function getCurrentEvent(pos) {
   for (let i = SCORE.length - 1; i >= 0; i--) {
-    if (pos >= SCORE[i].t) return SCORE[i];
+    if (pos >= SCORE[i].t) {
+      if (inPlayRange(SCORE[i])) return SCORE[i];
+      break;   // a Line by Line count-in: the previous line's last note isn't current
+    }
   }
   //Before the first event (Points mode's count-in): nothing is current yet —
   //returning SCORE[0] would light its lane up and animate a note that hasn't
@@ -729,7 +765,7 @@ function drawFrame() {
 
     //Event blocks for every score event in the visible window
     SCORE.forEach(scoreEv => {
-      if (!scoreEv.notes.includes(str.name)) return;
+      if (!scoreEv.notes.includes(str.name) || !inPlayRange(scoreEv)) return;
 
       const bLeft  = timeToX(scoreEv.t);
       const bRight = timeToX(scoreEv.t + scoreEv.dur);
@@ -895,7 +931,7 @@ function drawFrame() {
 
   //Rests — drawn as a neutral band across all lanes since they have no string
   SCORE.forEach(scoreEv => {
-    if (!scoreEv.rest) return;
+    if (!scoreEv.rest || !inPlayRange(scoreEv)) return;
 
     const bLeft  = timeToX(scoreEv.t);
     const bRight = timeToX(scoreEv.t + scoreEv.dur);
@@ -931,6 +967,7 @@ function drawFrame() {
 
   //Slur groups: unified border + arc
   SLUR_GROUPS.forEach(sg => {
+    if (!inPlayRange({ t: sg.startT })) return;
     const x1    = timeToX(sg.startT);
     const x2    = timeToX(sg.endT);              //arc ends at START of last note 
     const x2End = timeToX(sg.endT + sg.endDur);  //border extends to end of last note
@@ -1012,8 +1049,8 @@ function drawFrame() {
     }
   });
 
-  //Beat metronome flash (Points pulses off the song clock, so it agrees with the notes)
-  const beatPhase = mode === "points" ? ((songPos % 1) + 1) % 1 : (time * beatsPerSec) % 1;
+  //Beat metronome flash (Points and Line by Line pulse off the song clock, so it agrees with the notes and count-in)
+  const beatPhase = songClockBeats() ? ((songPos % 1) + 1) % 1 : (time * beatsPerSec) % 1;
   if (playing && beatPhase < 0.12) {
     const t = 1 - beatPhase / 0.12;
     const glow = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, H * 0.6);
@@ -1039,7 +1076,7 @@ function drawFrame() {
 // reading is stamped with when it was captured and placed on the song clock
 // via posHistory; the scorer never sees wall-clock time.
 const COUNT_IN_BEATS = 4;   // lead-in before the piece starts, so the first note is fair
-const MODE_LABELS    = { "play-along": "Play Along", "wait-for-me": "Wait for Me", "points": "Points" };
+const MODE_LABELS    = { "play-along": "Play Along", "wait-for-me": "Wait for Me", "points": "Points", "line-by-line": "Line by Line" };
 let scorer       = null;
 let posHistory   = [];      // [{ts, pos}] recent (frame time, songPos) pairs
 let lastMicSeq   = -1;      // last mic block taken, so a block polled twice counts once
@@ -1067,8 +1104,9 @@ const hudNotes   = document.getElementById("hudNotes");
 const hudTune    = document.getElementById("hudTune");
 const hudWarn    = document.getElementById("hudWarn");
 
-//Song beats per second — Play Along's rate, so Points runs at the same speed
-const songRate = bpm => bpm / 72;
+//Song beats per second at the tempo slider's BPM — every mode moves at this
+//rate, so the notes keep time with the metronome pulse and any accompaniment
+const songRate = bpm => bpm / 60;
 
 const ICON_PLAY  = '<i class="ti ti-player-play" aria-hidden="true"></i>';
 const ICON_PAUSE = '<i class="ti ti-player-pause" aria-hidden="true"></i>';
@@ -1088,6 +1126,7 @@ function applyModeUi() {
   appEl.classList.toggle("mode-points", pts);
   modeBadge.textContent = MODE_LABELS[mode] ?? "Play Along";
   scoreHud.hidden   = !pts;
+  lineNav.hidden    = mode !== "line-by-line";
   countInEl.hidden  = true;
   resultsEl.hidden  = true;
   noteFeedback.classList.remove("show");
@@ -1198,6 +1237,7 @@ function pointsTick(bpm) {
 function endPointsRun(bpm) {
   playing = false;
   cancelAnimationFrame(animFrame);
+  stopAccompaniment();
   playBtn.innerHTML = ICON_PLAY;
   countInEl.hidden = true;
   scorer.finish(songRate(bpm));
@@ -1282,6 +1322,169 @@ document.getElementById("resMenu").addEventListener("click", () => {
   document.getElementById("backBtn").click();
 });
 
+// ── Line by Line mode ────────────────────────────────────────────────────────
+// Plays one line of the ABC source at a time, at the same speed as Play Along,
+// with a count-in before each pass. When a line ends it repeats, or — with
+// "Next" toggled on — moves on to the following line.
+
+//Whether the beat counter and pulse run off songPos (so they agree with the
+//notes and the count-in) rather than the free-running metronome clock
+const songClockBeats = () => mode === "points" || mode === "line-by-line";
+
+//Park the song clock in the count-in before line `i`
+function startLine(i) {
+  if (!LINES.length) return;
+  lineIdx = Math.max(0, Math.min(LINES.length - 1, i));
+  songPos = LINES[lineIdx].start - COUNT_IN_BEATS;
+  time    = 0;
+  lineLabel.textContent = `Line ${lineIdx + 1} of ${LINES.length}`;
+  if (!playing) drawFrame();
+}
+
+//Called every frame of Line by Line, after songPos has advanced
+function lineTick() {
+  const line = LINES[lineIdx];
+  if (!line) return;
+  if (songPos < line.start) {
+    const n = String(Math.ceil(line.start - songPos));
+    if (countInEl.textContent !== n) countInEl.textContent = n;
+    countInEl.hidden = false;
+  } else {
+    countInEl.hidden = true;
+  }
+  if (songPos >= line.end) {
+    const wrapToStart = lineAdvance && lineIdx === LINES.length - 1;
+    startLine(wrapToStart ? 0 : lineAdvance ? lineIdx + 1 : lineIdx);
+  }
+}
+
+function setLineAdvance(on) {
+  lineAdvance = on;
+  lineAutoBtn.setAttribute("aria-pressed", String(on));
+  lineAutoBtn.innerHTML = on
+    ? '<i class="ti ti-arrow-right" aria-hidden="true"></i><span>Next</span>'
+    : '<i class="ti ti-repeat" aria-hidden="true"></i><span>Repeat</span>';
+}
+
+document.getElementById("linePrev").addEventListener("click", () => startLine(lineIdx - 1));
+document.getElementById("lineNext").addEventListener("click", () => startLine(lineIdx + 1));
+lineAutoBtn.addEventListener("click", () => setLineAdvance(!lineAdvance));
+
+//← / → step between lines while practising
+document.addEventListener("keydown", e => {
+  if (mode !== "line-by-line" || startScreen.style.display !== "none") return;   // not while on the menu
+  if (e.target.closest?.("input, select, textarea")) return;
+  if (e.key === "ArrowLeft")  { e.preventDefault(); startLine(lineIdx - 1); }
+  if (e.key === "ArrowRight") { e.preventDefault(); startLine(lineIdx + 1); }
+});
+
+// ── Piano accompaniment ──────────────────────────────────────────────────────
+// A backing track (accompaniment/, declared by %%accompaniment in the ABC)
+// played under Play Along, Points and Line by Line. The audio is the master
+// clock: songPos still advances smoothly on its own each frame, but is eased
+// toward wherever the audio actually is, and the audio is only seeked when the
+// two are far apart (a scrub, a line change, a loop back to the start). The
+// tempo slider sets the playback rate, pitch preserved.
+const accompAudio = new Audio();
+accompAudio.preload = "auto";
+accompAudio.preservesPitch = true;
+let ACCOMP         = null;    // {url, bpm, offset} for the loaded piece, or null
+let accompOn       = true;
+let accompDelayMs  = 0;       // per-piece fine-tune: + plays the piano later against the notes
+let accompPieceId  = null;
+const ACCOMP_MODES     = new Set(["play-along", "points", "line-by-line"]);   // not Wait for Me — the piano can't wait
+const ACCOMP_RESYNC_S  = 0.25;   // drift beyond this seeks the audio
+const ACCOMP_FOLLOW    = 0.15;   // fraction of a smaller drift closed per frame, by moving songPos
+const ACCOMP_DELAY_STEP_MS = 10;
+const accompDelayKey = id => `violin.accompDelayMs.${id}`;
+
+const accompGroup    = document.getElementById("accompGroup");
+const accompToggle   = document.getElementById("accompToggle");
+const accompVolume   = document.getElementById("accompVolume");
+const accompNudgeVal = document.getElementById("accompNudgeVal");
+
+const accompActive = () => !!ACCOMP && accompOn && ACCOMP_MODES.has(mode);
+
+//Where songPos falls in the audio file, in seconds
+const accompTimeFor = pos => ACCOMP.offset - accompDelayMs / 1000 + pos * 60 / ACCOMP.bpm;
+
+function stopAccompaniment() {
+  if (!accompAudio.paused) accompAudio.pause();
+}
+
+function loadAccompaniment(acc, pieceId) {
+  stopAccompaniment();
+  ACCOMP = acc || null;
+  accompPieceId = pieceId;
+  accompGroup.hidden = !ACCOMP;
+  if (!ACCOMP) {
+    accompAudio.removeAttribute("src");
+    return;
+  }
+  if (!accompAudio.src.endsWith(ACCOMP.url)) accompAudio.src = ACCOMP.url;
+  try {
+    const v = parseInt(localStorage.getItem(accompDelayKey(pieceId)), 10);
+    accompDelayMs = Number.isFinite(v) ? v : 0;
+  } catch (_) { accompDelayMs = 0; }
+  updateAccompUi();
+}
+
+function updateAccompUi() {
+  accompToggle.setAttribute("aria-pressed", String(accompOn));
+  accompToggle.innerHTML = accompOn
+    ? '<i class="ti ti-volume" aria-hidden="true"></i><span>On</span>'
+    : '<i class="ti ti-volume-off" aria-hidden="true"></i><span>Off</span>';
+  accompNudgeVal.textContent = (accompDelayMs > 0 ? "+" : accompDelayMs < 0 ? "−" : "") + Math.abs(accompDelayMs) + " ms";
+}
+
+//Called every frame while playing, after songPos has advanced on its own clock
+function syncAccompaniment(bpm) {
+  if (!accompActive()) { stopAccompaniment(); return; }
+
+  const rate = bpm / ACCOMP.bpm;
+  if (Math.abs(accompAudio.playbackRate - rate) > 1e-6) accompAudio.playbackRate = rate;
+
+  //Before beat 0's audio (a count-in) or past the end of the track: the
+  //song clock runs alone and the piano waits. (duration is NaN until the
+  //file's metadata has loaded, which also lands here.)
+  const target = accompTimeFor(songPos);
+  if (target < 0 || !(target < accompAudio.duration)) { stopAccompaniment(); return; }
+
+  if (accompAudio.paused) {
+    accompAudio.currentTime = target;
+    accompAudio.play().catch(err => console.warn("Accompaniment could not play:", err));
+    return;
+  }
+  if (accompAudio.seeking) return;
+
+  const drift = accompAudio.currentTime - target;   // + = the audio is ahead
+  if (Math.abs(drift) > ACCOMP_RESYNC_S) {
+    accompAudio.currentTime = target;
+  } else {
+    songPos += drift * ACCOMP_FOLLOW * ACCOMP.bpm / 60;
+  }
+}
+
+accompToggle.addEventListener("click", () => {
+  accompOn = !accompOn;
+  updateAccompUi();
+  if (!accompOn) stopAccompaniment();
+});
+accompVolume.addEventListener("input", () => { accompAudio.volume = parseFloat(accompVolume.value); });
+accompAudio.volume = parseFloat(accompVolume.value);
+
+function nudgeAccompaniment(deltaMs) {
+  accompDelayMs = Math.max(-1000, Math.min(1000, accompDelayMs + deltaMs));
+  try { localStorage.setItem(accompDelayKey(accompPieceId), String(accompDelayMs)); } catch (_) { /* private mode etc. */ }
+  updateAccompUi();
+}
+document.getElementById("accompEarlier").addEventListener("click", () => nudgeAccompaniment(-ACCOMP_DELAY_STEP_MS));
+document.getElementById("accompLater").addEventListener("click", () => nudgeAccompaniment(ACCOMP_DELAY_STEP_MS));
+
+//rAF stops in a background tab but audio wouldn't — pause it; the loop
+//picks it back up in sync on return
+document.addEventListener("visibilitychange", () => { if (document.hidden) stopAccompaniment(); });
+
 // ── Animation loop ────────────────────────────────────────────────────────────
 function loop(ts) {
   if (!lastTs) lastTs = ts;
@@ -1291,13 +1494,15 @@ function loop(ts) {
   const bpm = parseInt(tempoSlider.value, 10);
   time += dt;
 
-  if (mode === "play-along" || mode === "points") {
+  if (mode === "play-along" || mode === "points" || mode === "line-by-line") {
     songPos += dt * songRate(bpm);
+    syncAccompaniment(bpm);
     //Play Along loops forever; a Points run ends once the last note is judged
     if (mode === "play-along" && songPos >= SONG_DURATION) songPos = 0;
     holdStart = null;
     advanceTarget = null;
   } else {
+    stopAccompaniment();
     //Wait for Me: keep creeping forward at tempo even before the note is played, but never more than half the current note's length ahead of
     //its start — once that slack is used up the cursor parks there until the note is actually played. Once it is being played correctly, the
     //cap no longer applies the cursor keeps moving smoothly through the note while the hold timer below confirms it, instead of freezing.
@@ -1311,7 +1516,7 @@ function loop(ts) {
       const cap = correctNow
         ? waitingEv.t + waitingEv.dur - 0.001
         : waitingEv.t + waitingEv.dur * 0.5;
-      songPos = Math.min(songPos + dt * (bpm / 72), cap);
+      songPos = Math.min(songPos + dt * songRate(bpm), cap);
     }
 
     //Advance only once correct note is held for its required time
@@ -1334,7 +1539,7 @@ function loop(ts) {
 
     // Glide toward the next note at the current tempo instead of snapping
     if (advanceTarget !== null) {
-      songPos += dt * (bpm / 72);
+      songPos += dt * songRate(bpm);
       if (songPos >= advanceTarget) {
         songPos = advanceTarget;
         advanceTarget = null;
@@ -1347,14 +1552,17 @@ function loop(ts) {
   if (mode === "points") {
     recordPos(ts);
     runEnded = pointsTick(bpm);
+  } else if (mode === "line-by-line") {
+    lineTick();
   }
 
   const ev = getCurrentEvent(songPos);
   movementDisplay.textContent = ev.name || "";
 
-  //Points counts beats off the song itself, so the pulse agrees with the
-  //notes (and the count-in); the other modes keep the metronome's own clock
-  const beat = mode === "points"
+  //Points and Line by Line count beats off the song itself, so the pulse
+  //agrees with the notes (and the count-in); the other modes keep the
+  //metronome's own clock
+  const beat = songClockBeats()
     ? ((Math.floor(songPos) % 4) + 4) % 4 + 1
     : (Math.floor(time * bpm / 60) % 4) + 1;
   beatDisplay.textContent = "♩ " + beat;
@@ -1377,6 +1585,7 @@ playBtn.addEventListener("click", () => {
   } else {
     playBtn.innerHTML = '<i class="ti ti-player-play" aria-hidden="true"></i>';
     cancelAnimationFrame(animFrame);
+    stopAccompaniment();
   }
 });
 
@@ -1394,6 +1603,12 @@ document.getElementById("timeline").addEventListener("click", (e) => {
   const rect  = e.currentTarget.getBoundingClientRect();
   const ratio = (e.clientX - rect.left) / rect.width;
   const raw   = ratio * SONG_DURATION;
+  if (mode === "line-by-line") {
+    //Jump to (the count-in of) whichever line was clicked
+    const i = LINES.findIndex(l => raw < l.end);
+    startLine(i < 0 ? LINES.length - 1 : i);
+    return;
+  }
   if (mode === "wait-for-me" && SCORE.length) {
     //Snap to the start of whichever note event is closest to the click
     const next = SCORE.find(ev => ev.t >= raw);
@@ -1414,6 +1629,7 @@ pieceSelect.addEventListener("change", () => {
   if (playing) {
     playing = false;
     cancelAnimationFrame(animFrame);
+    stopAccompaniment();
     playBtn.innerHTML = '<i class="ti ti-player-play" aria-hidden="true"></i>';
   }
   loadScore(pieceSelect.value).then(() => {
@@ -1492,6 +1708,7 @@ document.getElementById("backBtn").addEventListener("click", () => {
   if (playing) {
     playing = false;
     cancelAnimationFrame(animFrame);
+    stopAccompaniment();
     playBtn.innerHTML = '<i class="ti ti-player-play" aria-hidden="true"></i>';
   }
   startScreen.style.display = "";

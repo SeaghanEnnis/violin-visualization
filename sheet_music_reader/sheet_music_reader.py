@@ -46,6 +46,10 @@ Non-standard extensions (this project only — plain comments to any other ABC t
                             sanity-check that, and as the fallback (rows spaced
                             evenly down the page) if detection can't be trusted.
                             Place anywhere; order doesn't matter.
+  %%accompaniment file=X.mp3 bpm=N offset=S
+                            a backing track in accompaniment/, recorded at N BPM,
+                            with score beat 0 at S seconds into the audio. Read by
+                            violin-visualizer/app.py, not by this parser.
 """
 
 from __future__ import annotations
@@ -183,6 +187,7 @@ def _parse_header(lines: list[str]) -> dict[str, str]:
 
 _TOKEN_RE = re.compile(r"""
     (?P<sync>  @@SYNC:(?P<syncpage>\d+):(?P<syncrow>\d+)@@ )   |  # %%sync marker, see above
+    (?P<srcline>  @@LINE:(?P<lineno>\d+)@@ )     |   # start of a source line, see parse_abc
     (?P<annotation>  "[^"]*" )                   |   # "Tutti", "Solo", chord symbols — skip
     (?P<tuplet>      \( (?P<tnum>[2-9]) )       |
     (?P<chord_start> \[  )                       |
@@ -328,7 +333,10 @@ def parse_abc(abc_text: str) -> SheetMusic:
 
     # ABC convention: uppercase C = C4 (middle C)
     BASE_OCTAVE     = 4
-    body_text       = " ".join(body_lines)
+    #Each body line starts with a marker so events can be tagged with the
+    #source line they came from (for Line by Line practice). Lines with no
+    #notes (comments, %%sync) just get their marker overwritten by the next one.
+    body_text       = " ".join(f" @@LINE:{i}@@ {line}" for i, line in enumerate(body_lines))
     current_measure = track.add_measure()
 
     in_chord            = False
@@ -340,6 +348,7 @@ def parse_abc(abc_text: str) -> SheetMusic:
     pending_tie         = False
     pending_annotation  = ""          # last "text" annotation seen, applied to next event
     pending_sync: Optional[tuple[int, int]] = None   # %%sync (page, row), applied to next event
+    current_line        = 0           # index of the body line being read
     tuplet_rem          = 0
     tuplet_ratio: Optional[tuple[int, int]] = None
     bar_accs: dict[str, int]          = {}  # explicit accidentals in current bar
@@ -357,6 +366,10 @@ def parse_abc(abc_text: str) -> SheetMusic:
         #the anchor a whole bar early.
         if kind == "sync":
             pending_sync = (int(m.group("syncpage")), int(m.group("syncrow")))
+            continue
+
+        if kind == "srcline":
+            current_line = int(m.group("lineno"))
             continue
 
         #Inline annotations ("Tutti", "Solo", chord symbols)
@@ -396,6 +409,7 @@ def parse_abc(abc_text: str) -> SheetMusic:
                 chord_obj = Chord(notes=valid_notes, duration=chord_dur)
                 chord_obj._section = pending_annotation  # type: ignore[attr-defined]
                 chord_obj._sync    = pending_sync        # type: ignore[attr-defined]
+                chord_obj._line    = current_line        # type: ignore[attr-defined]
                 pending_annotation = ""
                 pending_sync = None
                 current_measure.add_event(chord_obj)
@@ -460,6 +474,7 @@ def parse_abc(abc_text: str) -> SheetMusic:
             event._section  = pending_annotation
             event._slur_id  = current_slur_id
             event._sync     = pending_sync
+            event._line     = current_line
             pending_annotation = ""
             pending_sync = None
             current_measure.add_event(event)

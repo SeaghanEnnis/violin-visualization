@@ -41,6 +41,10 @@
             <span class="mode-name">Points</span>
             <span class="mode-desc">Play along and get scored on tempo and pitch</span>
           </button>
+          <button class="mode-card" data-mode="line-by-line">
+            <span class="mode-name">Line by Line</span>
+            <span class="mode-desc">Practise one line of the score at a time, at tempo</span>
+          </button>
         </div>
       </div>
 
@@ -114,6 +118,18 @@
       <span class="ctrl-val" id="intensityVal">1</span>
     </div>
 
+    <!-- Backing track (only for pieces with one in accompaniment/) -->
+    <div class="ctrl-group" id="accompGroup" hidden>
+      <span class="ctrl-label">Piano</span>
+      <button id="accompToggle" class="line-auto" aria-pressed="true" title="Play the piano accompaniment">
+        <i class="ti ti-volume" aria-hidden="true"></i><span>On</span>
+      </button>
+      <input type="range" id="accompVolume" min="0" max="1" value="0.8" step="0.05" aria-label="Accompaniment volume" />
+      <button id="accompEarlier" class="icon-btn-sm" aria-label="Piano earlier" title="Piano sounds late? Move it earlier">−</button>
+      <span class="ctrl-val" id="accompNudgeVal" title="Fine-tune the piano's alignment with the notes">0 ms</span>
+      <button id="accompLater" class="icon-btn-sm" aria-label="Piano later" title="Piano sounds early? Move it later">+</button>
+    </div>
+
     <!-- Input device: cross-platform (Windows/Mac/Linux) list from sounddevice/PortAudio -->
     <div class="ctrl-group">
       <span class="ctrl-label">Input</span>
@@ -156,6 +172,20 @@
         <div class="hud-warn" id="hudWarn" hidden>No microphone detected</div>
       </div>
       <div id="noteFeedback" aria-live="polite"></div>
+
+      <!-- Line by Line mode only: which ABC line is being practised -->
+      <div id="lineNav" hidden>
+        <button id="linePrev" class="icon-btn-sm" aria-label="Previous line" title="Previous line (←)">
+          <i class="ti ti-chevron-left" aria-hidden="true"></i>
+        </button>
+        <span id="lineLabel">Line 1 of 1</span>
+        <button id="lineNext" class="icon-btn-sm" aria-label="Next line" title="Next line (→)">
+          <i class="ti ti-chevron-right" aria-hidden="true"></i>
+        </button>
+        <button id="lineAuto" class="line-auto" aria-pressed="false" title="Repeat this line, or move on to the next one when it ends">
+          <i class="ti ti-repeat" aria-hidden="true"></i><span>Repeat</span>
+        </button>
+      </div>
       <div id="countIn" hidden></div>
 
       <div id="timeline"><div id="timeline-fill"></div></div>

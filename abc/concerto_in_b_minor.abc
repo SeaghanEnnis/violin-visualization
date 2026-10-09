@@ -8,6 +8,10 @@ K:Bmin
 
 % Uppercase is lower octave B, = B3, A = A4, b = B5, c` = C6
 
+% Piano backing track in accompaniment/: recorded at 100 BPM, score beat 0
+% (the piano's opening F#) lands 0.92s into the audio.
+%%accompaniment file=concerto_in_b_minor-100bpm.mp3 bpm=100 offset=0.92
+
 % Each %%sync tags the measure right after it with its page/row in
 % sheets/concerto_in_b_minor.pdf, so the PDF viewer can scroll in step with
 % playback. row is the 1-indexed system on that page, counted from the top.
