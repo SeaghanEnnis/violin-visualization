@@ -38,7 +38,7 @@ f2 d2 | B2 g2 | (A a) (g e) | (g3/2 f/2) f2 |
 %%sync page=1 row=9
 d2 B2 | G2 e2 | (e c) (d D) | (=F3/2 E/2) E2 |
 %%sync page=1 row=10
-(F/2 G/2 A/2 G/2) (F/2 E/2 D/2 C/2) | (B,/2 D/2 G/2 B/2) D2 | (c/2 d/2 e/2 d/2) (c/2 B/2 A/2 G/2) |
+(F/2 G/2 A/2 G/2) (F/2 E/2 D/2 C/2) | (B,/2 D/2 G/2 B/2) d2 | (c/2 d/2 e/2 d/2) (c/2 B/2 A/2 G/2) |
 %%syncpage page=1 rows=10
 %%sync page=2 row=1
 (F/2 A/2 d/2 f/2) a3/2  (f/2 | ^a3/2) (f/2 b) (B/2 c/2 | d) (D/2 E/2 =F) (E/2 D/2 |
